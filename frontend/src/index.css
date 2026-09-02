@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  transition: background-color 0.15s ease;
+}
+
+* {
+  scrollbar-color: theme("colors.slate.300") transparent;
+}
+html.dark * {
+  scrollbar-color: theme("colors.slate.700") transparent;
+}
