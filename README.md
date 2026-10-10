@@ -1,35 +1,80 @@
 # Ephemeral Cross-Device Sharing Platform
 
-Share files and text between devices with a short code. Every session — **Quick Transfer** or **Shared Workspace** — lives for exactly 5 minutes and is then automatically and completely deleted.
+Share files and text between devices with a short access code. Every session (**Quick Transfer** or **Shared Workspace**) lives for exactly **5 minutes** and is then deleted automatically.
 
-Stack: **Go (Gin)** · **React + Tailwind CSS** · **PostgreSQL** · **Redis** · **S3-compatible storage (MinIO by default, swappable for AWS S3 / Cloudflare R2)**
+**Stack:** Go 1.25 (Gin) · React 18 + Vite + Tailwind CSS · Redis 7 · PostgreSQL 16 · S3-compatible storage (MinIO locally, AWS S3 / Cloudflare R2 in production) · Docker · Capacitor (iOS/Android wrapper)
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system design, data flow, and security rationale.
+📐 Full system design, data flows, threat model and known limitations: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+🚀 Production checklist: [`PRODUCTION.md`](PRODUCTION.md)
 
-## End-to-End Encryption
+---
 
-Every file and text payload is encrypted **in the browser** with AES-GCM 256 before it ever leaves the tab — the server, Redis, and object storage only ever hold ciphertext.
+## Features
 
-- On session creation, the browser generates a random AES key with the Web Crypto API. The key is never sent in any request; it lives only in the URL fragment (`/session/CODE#k=...`), which browsers never transmit to the server or log.
-- Recipients get the key by receiving the full link (fragment included). A bare access code alone lets someone view session metadata but not decrypt content — the room UI offers a manual "paste decryption key" fallback for that case.
-- File names and MIME types are encrypted too (bundled into an envelope alongside the file bytes), so the server never learns what was shared, only ciphertext sizes and timestamps.
-- The fragment is stripped from the address bar immediately after the key is captured into memory, so it doesn't linger in browser history or address-bar screenshots.
+- **Two session modes**
+  - **Quick Transfer:** create, drop files or text, share the code.
+  - **Shared Workspace:** several people join with the code and share content live. The participant limit is configurable (default 10).
+- **Content types:** any file (documents, images, audio, video, ZIP; up to 200 MB by default), plus text notes, multi-line code snippets, URLs and clipboard content.
+- **Short, readable codes:** Crockford base32 (no `I/L/O/U` lookalikes), from `crypto/rand`. Join by typing the code or pasting the link.
+- **Hard 5-minute expiry:** one absolute Redis TTL that is never extended. A live countdown turns red in the last 30 seconds.
+- **Real-time feed:** WebSockets fanned out through Redis pub/sub, with auto-reconnect and catch-up.
+- **Direct-to-storage uploads and downloads:** pre-signed URLs, so file bytes never pass through the API. Upload progress bar included.
+- **Client-side encryption:** AES-GCM-256 in the browser for file bytes, filenames and text.
+- **Owner-only "End session":** deletes everything immediately for everyone.
+- Light/dark theme, responsive UI, toast notifications.
 
-This is a deliberate trade-off, not a full zero-knowledge system: metadata like session codes, content counts, and timing are still visible to the server (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full threat model).
+## Architecture at a Glance
+
+```
+ Browser (React) ──REST──▶  Go/Gin API ──▶ Redis      (live state, TTL, pub/sub, expiry events)
+       │         ◀──WS───       │     └──▶ PostgreSQL (async analytics only)
+       └──── PUT/GET encrypted bytes via pre-signed URL ────▶ S3 / R2 / MinIO
+```
+
+| Component | Role |
+|---|---|
+| **Redis** | Source of truth for live sessions, content metadata, participants and pending uploads. Every key shares the session's TTL. Pub/sub carries WebSocket events between API instances. Keyspace `expired` events trigger cleanup. |
+| **Object storage** | Encrypted file blobs under `sessions/{code}/{contentId}/…`. |
+| **PostgreSQL** | Aggregate traffic analytics only: hashed code, type, timestamps, share counts. Writes are async and best-effort, so the app keeps working if Postgres is down. |
+| **Go API** | REST handlers, WebSocket hub, rate limiting, and the cleanup worker. Holds no per-request state, so it scales horizontally. |
+
+## Client-Side Encryption
+
+All file bytes, filenames, MIME types and text are encrypted **in the browser** with AES-GCM-256 before upload. The server, Redis and object storage only ever store ciphertext.
+
+- The key is derived in the browser from the access code: `PBKDF2-SHA256`, 100k iterations. Anyone with the code can decrypt, so there is no separate key to share or lose.
+- Every payload uses a fresh random IV. GCM also detects tampering.
+- **Honest threat model:** the code is sent to the server on every request. That means this protects against leaked storage, Redis dumps and storage providers, but it is **not** zero-knowledge against the server operator. Strength is also bounded by the code's entropy. This trade-off favors the "type a short code" UX. See [ARCHITECTURE §8.2](docs/ARCHITECTURE.md#82-client-side-encryption-frontendsrclibcryptojs).
+
+## How Expiration Works
+
+1. On creation, `SET session:{code} … EX 300`. This is the only clock.
+2. Child keys (content list, items, pending uploads, participants) get the session's **remaining** TTL. Nothing ever extends it.
+3. Every content request checks that the session key is live first, so the API returns `410 Gone` at exactly 5:00.
+4. Redis emits a keyspace `expired` event (`notify-keyspace-events Ex`). The cleanup worker then:
+   - deletes the session's S3 objects,
+   - marks the analytics row inactive,
+   - pushes `session_expired` to WebSocket clients and closes their connections.
+5. A periodic sweep (every 60 s) corrects any analytics rows a missed event left active.
+6. At boot, the backend **refuses to start** if Redis keyspace notifications are disabled.
 
 ## Quick Start (Docker Compose)
 
 ```bash
-git clone <repo>
+git clone https://github.com/himanshmunjal/Ephemeral-share.git
 cd ephemeral-share
 docker compose up --build
 ```
 
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8080
-- MinIO console: http://localhost:9001 (minioadmin / minioadmin)
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8080 (health: `/healthz`) |
+| MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 
-The `minio-init` service auto-creates the `ephemeral-share` bucket on first boot.
+`minio-init` creates the `ephemeral-share` bucket and its CORS policy on first boot. Postgres migrations run automatically on first volume init.
+
+> Tip: set `SESSION_TTL_SECONDS=30` on the backend to watch expiry and cleanup happen quickly.
 
 ## Local Development (without Docker)
 
@@ -39,7 +84,7 @@ cd backend
 go mod tidy
 go run ./cmd/server
 ```
-Requires local Postgres, Redis (with `notify-keyspace-events Ex` enabled), and a MinIO/S3 endpoint — see `.env.example` for the variables to export.
+You need local Postgres, Redis started with `--notify-keyspace-events Ex`, and a MinIO/S3 endpoint. See `.env.example`.
 
 **Frontend**
 ```bash
@@ -48,46 +93,103 @@ npm install
 npm run dev
 ```
 
+**Mobile (Capacitor)**
+```bash
+cd frontend
+npm run cap:ios       # or: npm run cap:android
+```
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SESSION_TTL_SECONDS` | `300` | Session lifetime |
+| `MAX_UPLOAD_MB` | `200` | Per-file size limit (checked before and after upload) |
+| `CODE_LENGTH` | `6` (`8` in compose) | Access code length |
+| `RATE_LIMIT_PER_MIN` | `60` | Per-IP limit on create (lookup/join get 2×) |
+| `ALLOWED_ORIGIN` | `http://localhost:5173` | Comma-separated CORS + WebSocket origins |
+| `REDIS_ADDR` / `REDIS_PASSWORD` | `redis:6379` | Redis |
+| `POSTGRES_DSN` | local dev DSN | Analytics DB (optional at runtime) |
+| `S3_ENDPOINT` | `http://minio:9000` | Backend → storage (`none` for AWS S3) |
+| `S3_PUBLIC_ENDPOINT` | `http://localhost:9000` | Browser-reachable host used to sign URLs |
+| `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | MinIO dev values | Storage credentials (leave keys blank to use an IAM role) |
+| `VITE_API_URL` | `http://localhost:8080/api/v1` | Frontend build-time API base (`https` gives `wss` automatically) |
+
 ## API Overview
+
+Base: `/api/v1`. Full table with status codes in [ARCHITECTURE §7](docs/ARCHITECTURE.md#7-api-reference).
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/sessions` | Create a session (`quick_transfer` or `shared_workspace`) |
-| GET | `/api/v1/sessions/:code` | Fetch session metadata + remaining TTL |
-| POST | `/api/v1/sessions/:code/join` | Join a Shared Workspace |
-| POST | `/api/v1/sessions/:code/content/upload-url` | Get a pre-signed URL, then PUT the file directly to it |
-| POST | `/api/v1/sessions/:code/content/text` | Add a text note/snippet/URL |
-| GET | `/api/v1/sessions/:code/content` | List current content feed |
-| GET | `/api/v1/sessions/:code/content/:id/download` | Redirects to a pre-signed download URL |
-| DELETE | `/api/v1/sessions/:code` | Owner-only early termination |
-| WS | `/ws/sessions/:code` | Real-time feed for Shared Workspace participants |
+| POST | `/sessions` | Create a session (`quick_transfer` or `shared_workspace`). Sets the `owner_token` cookie. |
+| GET | `/sessions/:code` | Session metadata and remaining TTL |
+| POST | `/sessions/:code/join` | Join a Shared Workspace (enforces the participant limit) |
+| DELETE | `/sessions/:code` | Owner-only early termination |
+| POST | `/sessions/:code/content/upload-url` | Get a pre-signed PUT URL (upload is held as pending) |
+| POST | `/sessions/:code/content/:id/complete` | Confirm upload. Server checks real size, then publishes the item. |
+| POST | `/sessions/:code/content/text` | Add encrypted text (`note` / `snippet` / `url` / `clipboard`, ≤ 64 KB) |
+| GET | `/sessions/:code/content` | List the content feed |
+| GET | `/sessions/:code/content/:id/download` | 302 to a pre-signed GET (`?redirect=false` returns JSON) |
+| WS | `/ws/sessions/:code` | Events: `content_added`, `participant_joined`, `session_ended`, `session_expired` |
 
-## How Expiration Works
+## Security Controls
 
-1. On creation, the session's Redis hash is written with `EXPIRE 300`.
-2. Every dependent Redis key (content list, content items, participant set) is capped to the *same remaining* TTL — never extended — so nothing can outlive the original 5 minutes.
-3. Redis keyspace notifications (`notify-keyspace-events Ex`) fire when the session key expires; a backend worker reacts by deleting the session's S3 objects and force-closing any open WebSocket connections.
-4. A bucket lifecycle rule and periodic sweep act as a backstop in case a notification is ever missed.
+- Secure random codes, collision-checked, plus per-IP token-bucket rate limiting on create, lookup and join.
+- Size limits enforced twice: the declared size before presigning, and the actual size from `HEAD` after upload (oversized objects are deleted).
+- Input validation with Gin binding tags; text `content_type` restricted to an allow-list.
+- Short-lived, single-object pre-signed URLs (PUT 2 min, GET 60 s).
+- Owner token in an `HttpOnly; Secure` cookie; only hashes are stored in Postgres.
+- CORS and the WebSocket origin check use the same explicit allow-list.
+- In `GIN_MODE=release` the server refuses to boot with dev credentials, localhost or `http://` origins, or a localhost public S3 endpoint.
 
 ## Project Layout
 
 ```
-backend/    Go/Gin API, Redis session store, S3 client, WebSocket hub, cleanup worker
-frontend/   React + Tailwind SPA (create/join/session-room pages)
-docs/       Architecture and data-flow documentation
-docker-compose.yml   Full local stack: postgres, redis, minio, backend, frontend
+backend/            Go/Gin API
+  cmd/server/         entrypoint + boot-time safety checks
+  internal/handlers/  session, content, websocket, cleanup, code generation
+  internal/redisclient/  Redis keys, TTL logic, pub/sub
+  internal/storage/   S3 client + pre-signing
+  internal/ws/        per-session WebSocket hub
+  internal/analytics/ async Postgres analytics
+  internal/middleware/ rate limiting
+  migrations/         SQL schema
+frontend/           React + Tailwind SPA (+ Capacitor ios/ and android/)
+docs/               Architecture and data-flow docs
+infra/              MinIO bucket/CORS bootstrap
+docker-compose.yml  Local stack: postgres, redis, minio, backend, frontend
 ```
 
 ## Deploying to Production
 
-`docker-compose.yml` and `.env.example` are local-dev only (plain HTTP,
-MinIO, dev credentials). See [`PRODUCTION.md`](PRODUCTION.md) for the
-pre-deploy checklist (Redis keyspace notifications, credential rotation,
-CORS, TLS, S3 endpoint split) and [`.env.production.example`](.env.production.example)
-for a filled-in-the-blanks template. Run the backend with `GIN_MODE=release`
-so it self-checks most of this at boot and refuses to start with leftover
-dev defaults.
+`docker-compose.yml` and `.env.example` are for local dev only (plain HTTP, MinIO, dev credentials). Before deploying, follow [`PRODUCTION.md`](PRODUCTION.md) and fill in [`.env.production.example`](.env.production.example). It covers:
 
-## Status
+- Redis keyspace notifications
+- credential rotation
+- CORS
+- TLS
+- the split between the internal and public S3 endpoints
 
-This implements the core flows end-to-end: session creation, code/link-based join, client-side end-to-end encrypted file/text sharing via pre-signed URLs, live updates for Shared Workspace, TTL-driven expiration and cleanup (with a Postgres periodic-sweep backstop), and a light/dark themed UI. Areas intentionally left as follow-up work: file-type/MIME allow-list enforcement at the API layer (currently opaque to the server since content is encrypted client-side) and resumable/chunked uploads for very large files.
+Run the backend with `GIN_MODE=release` so it checks most of this itself at boot.
+
+## Status and Roadmap
+
+**Done:**
+- session create and join by code or link
+- client-side encrypted file and text sharing via pre-signed URLs, with two-phase upload confirmation
+- live Shared Workspace feed
+- TTL-driven expiry and cleanup with a boot-time safety check
+- owner termination
+- light/dark responsive UI
+- Docker setup
+- Capacitor mobile wrapper
+
+**Next** (details in [ARCHITECTURE §11](docs/ARCHITECTURE.md#11-known-limitations-and-future-work)):
+- Redis-backed global rate limiting with lockout
+- atomic participant limit (Lua)
+- single-uploader enforcement for Quick Transfer
+- bucket lifecycle rule plus paginated S3 cleanup
+- HMAC instead of SHA-256 for code hashes
+- optional fragment-key end-to-end mode
+- chunked/multipart encrypted uploads for very large files
+- automated tests
