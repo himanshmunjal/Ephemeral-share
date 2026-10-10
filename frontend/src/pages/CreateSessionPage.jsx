@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { generateSessionKey, exportKey } from "../lib/crypto";
-import { storeKey } from "../lib/sessionKeys";
 import { useToast } from "../components/ToastProvider.jsx";
 
 const MODES = [
@@ -49,14 +47,7 @@ export default function CreateSessionPage() {
       // just lets the room UI know to show the "end session" control.
       sessionStorage.setItem(`owner:${res.code}`, "1");
 
-      // Generate the E2E encryption key entirely client-side. It is exported
-      // into the URL fragment (never sent in a request) so SessionRoomPage
-      // can pick it up on load and the server never learns it.
-      const key = await generateSessionKey();
-      const keyB64 = await exportKey(key);
-      storeKey(res.code, keyB64);
-
-      navigate(`/session/${res.code}#k=${keyB64}`);
+      navigate(`/session/${res.code}`);
     } catch (e) {
       setError(e.message);
       toast.error(e.message);
@@ -115,7 +106,7 @@ export default function CreateSessionPage() {
           <rect x="5" y="11" width="14" height="9" rx="2" />
           <path d="M8 11V8a4 4 0 118 0v3" />
         </svg>
-        <span>Files and text are encrypted on your device before upload. The decryption key lives only in the link you share — we never see it.</span>
+        <span>Files and text are encrypted on your device before upload. The key is derived from the access code itself — we never see it.</span>
       </div>
 
       {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}

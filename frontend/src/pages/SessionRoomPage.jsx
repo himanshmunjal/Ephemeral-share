@@ -3,8 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useCountdown, formatMMSS } from "../hooks/useCountdown";
 import { useSessionSocket } from "../hooks/useSessionSocket";
-import { importKey } from "../lib/crypto";
-import { loadKey, storeKey, clearKey } from "../lib/sessionKeys";
+import { deriveKeyFromCode } from "../lib/crypto";
 import UploadWidget from "../components/UploadWidget.jsx";
 import ContentFeedItem from "../components/ContentFeedItem.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -20,49 +19,15 @@ export default function SessionRoomPage() {
   const [ending, setEnding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [encKey, setEncKey] = useState(null);
-  const [manualKeyInput, setManualKeyInput] = useState("");
-  const [keyMissing, setKeyMissing] = useState(false);
   const isOwner = sessionStorage.getItem(`owner:${code}`) === "1";
 
   const remaining = useCountdown(session?.expires_at, session?.ttl_seconds);
 
-  // Pick up the AES key: from the URL fragment (freshly shared link) first,
-  // falling back to sessionStorage (page reload in the same tab). The
-  // fragment is stripped from the address bar immediately after capture so
-  // the raw key never lingers in browser history, autofill, or a screen
-  // share of the URL bar.
+  // The AES key is derived from the access code alone, so there's nothing
+  // extra to carry around or paste in.
   useEffect(() => {
-    (async () => {
-      const hash = window.location.hash;
-      let raw = hash.startsWith("#k=") ? hash.slice(3) : loadKey(code);
-      if (hash.startsWith("#k=")) {
-        storeKey(code, raw);
-        window.history.replaceState(null, "", window.location.pathname);
-      }
-      if (!raw) {
-        setKeyMissing(true);
-        return;
-      }
-      try {
-        setEncKey(await importKey(raw));
-      } catch {
-        setKeyMissing(true);
-      }
-    })();
+    deriveKeyFromCode(code).then(setEncKey);
   }, [code]);
-
-  function submitManualKey(e) {
-    e.preventDefault();
-    const raw = manualKeyInput.trim();
-    if (!raw) return;
-    importKey(raw)
-      .then((key) => {
-        storeKey(code, raw);
-        setEncKey(key);
-        setKeyMissing(false);
-      })
-      .catch(() => toast.error("That doesn't look like a valid decryption key."));
-  }
 
   const refreshContent = useCallback(async () => {
     try {
@@ -115,20 +80,6 @@ export default function SessionRoomPage() {
     }
   }, [remaining, session, navigate]);
 
-  function shareLink() {
-    const key = manualKeyInput || loadKey(code);
-    return key ? `${window.location.origin}/session/${code}#k=${key}` : `${window.location.origin}/session/${code}`;
-  }
-
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(shareLink());
-      toast.success("Link copied — includes the decryption key");
-    } catch {
-      toast.error("Couldn't copy — copy the link from the address bar instead");
-    }
-  }
-
   async function copyCode() {
     try {
       await navigator.clipboard.writeText(code);
@@ -138,20 +89,11 @@ export default function SessionRoomPage() {
     }
   }
 
-  async function nativeShare() {
-    try {
-      await navigator.share({ title: "ephemeral.share", text: "Join my session", url: shareLink() });
-    } catch {
-      // user cancelled the share sheet — no-op
-    }
-  }
-
   async function endSession() {
     setEnding(true);
     try {
       await api.endSession(code);
       sessionStorage.removeItem(`owner:${code}`);
-      clearKey(code);
       navigate("/", { replace: true });
     } catch (e) {
       toast.error(e.message);
@@ -189,27 +131,12 @@ export default function SessionRoomPage() {
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">
             {session.type === "shared_workspace" ? "Shared Workspace" : "Quick Transfer"}
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 normal-case tracking-normal dark:bg-emerald-500/10 dark:text-emerald-400">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-2.5 w-2.5">
-                <rect x="5" y="11" width="14" height="9" rx="2" />
-                <path d="M8 11V8a4 4 0 118 0v3" />
-              </svg>
-              Encrypted
-            </span>
           </div>
           <div className="mt-1 font-mono text-2xl font-semibold tracking-widest text-slate-800 dark:text-slate-100">{code}</div>
           <div className="mt-1.5 flex flex-wrap gap-3 text-xs font-medium">
-            <button onClick={copyLink} className="text-brand-600 hover:underline dark:text-brand-500">
-              Copy link
+            <button onClick={copyCode} className="text-brand-600 hover:underline dark:text-brand-500">
+              Copy code
             </button>
-            <button onClick={copyCode} className="text-slate-500 hover:underline dark:text-slate-400">
-              Copy code only
-            </button>
-            {typeof navigator !== "undefined" && navigator.share && (
-              <button onClick={nativeShare} className="text-slate-500 hover:underline dark:text-slate-400">
-                Share…
-              </button>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -230,26 +157,6 @@ export default function SessionRoomPage() {
       {urgent && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-300">
           This session is about to expire — save anything you need now.
-        </div>
-      )}
-
-      {keyMissing && (
-        <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm dark:border-amber-900 dark:bg-amber-900/20">
-          <p className="text-amber-800 dark:text-amber-300">
-            No decryption key found for this session. If you were only given the code, ask the sender for the full
-            link, or paste the key below.
-          </p>
-          <form onSubmit={submitManualKey} className="flex gap-2">
-            <input
-              value={manualKeyInput}
-              onChange={(e) => setManualKeyInput(e.target.value)}
-              placeholder="Paste decryption key"
-              className="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm dark:border-amber-800 dark:bg-slate-900"
-            />
-            <button type="submit" className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700">
-              Unlock
-            </button>
-          </form>
         </div>
       )}
 

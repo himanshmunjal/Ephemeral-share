@@ -1,22 +1,28 @@
-// Client-side E2E encryption. The AES key is generated in the browser,
-// travels only in the URL fragment (never sent to the server or logged in
-// any request), and every file/text payload is encrypted before it leaves
-// the tab. The server only ever sees ciphertext.
+// Client-side encryption. The AES key is derived in the browser from the
+// session's access code (never sent to the server or logged in any
+// request), and every file/text payload is encrypted before it leaves the
+// tab. The server only ever sees ciphertext. Anyone with the access code
+// can re-derive the same key — there's no separate secret to carry.
 const AES_ALGO = { name: "AES-GCM", length: 256 };
 const IV_BYTES = 12;
+const KDF_SALT = new TextEncoder().encode("ephemeral-share/session-key/v1");
+const KDF_ITERATIONS = 100_000;
 
-export async function generateSessionKey() {
-  return crypto.subtle.generateKey(AES_ALGO, true, ["encrypt", "decrypt"]);
-}
-
-export async function exportKey(key) {
-  const raw = await crypto.subtle.exportKey("raw", key);
-  return bytesToBase64Url(new Uint8Array(raw));
-}
-
-export async function importKey(base64url) {
-  const raw = base64UrlToBytes(base64url);
-  return crypto.subtle.importKey("raw", raw, AES_ALGO, true, ["encrypt", "decrypt"]);
+export async function deriveKeyFromCode(code) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(code),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: KDF_SALT, iterations: KDF_ITERATIONS, hash: "SHA-256" },
+    material,
+    AES_ALGO,
+    false,
+    ["encrypt", "decrypt"]
+  );
 }
 
 export async function encryptBytes(key, plainBuffer) {

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
-import { storeKey } from "../lib/sessionKeys";
 
-/** Accepts either a bare access code or a full shared link (code + #k=key fragment). */
+/** Accepts either a bare access code or a full shared link. */
 function parseInput(raw) {
   const trimmed = raw.trim();
   if (trimmed.includes("/session/")) {
@@ -11,13 +10,12 @@ function parseInput(raw) {
       const url = new URL(trimmed, window.location.origin);
       const match = url.pathname.match(/\/session\/([^/]+)/);
       const code = match?.[1]?.toUpperCase();
-      const key = url.hash.startsWith("#k=") ? url.hash.slice(3) : null;
-      if (code) return { code, key };
+      if (code) return { code };
     } catch {
       // fall through to treating it as a bare code below
     }
   }
-  return { code: trimmed.toUpperCase(), key: null };
+  return { code: trimmed.toUpperCase() };
 }
 
 export default function JoinSessionPage() {
@@ -31,15 +29,10 @@ export default function JoinSessionPage() {
     setLoading(true);
     setError(null);
     try {
-      const { code, key } = parseInput(input);
+      const { code } = parseInput(input);
       if (!code) throw new Error("Enter an access code or paste a shared link");
       await api.getSession(code); // validate it exists before navigating
-      if (key) {
-        storeKey(code, key);
-        navigate(`/session/${code}#k=${key}`);
-      } else {
-        navigate(`/session/${code}`);
-      }
+      navigate(`/session/${code}`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -74,8 +67,7 @@ export default function JoinSessionPage() {
       </form>
 
       <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-        Joining with only a code (no link) still works, but you'll need to paste the decryption key
-        separately to view encrypted content.
+        The access code alone is enough — content is encrypted and decrypted automatically.
       </p>
     </div>
   );
