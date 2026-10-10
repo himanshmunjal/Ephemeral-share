@@ -60,6 +60,11 @@ export const api = {
     }),
 
   downloadUrl: (code, contentId) => `${BASE_URL}/sessions/${code}/content/${contentId}/download`,
+
+  // Resolves the short-lived pre-signed object URL without a redirect, so the
+  // follow-up fetch to object storage keeps a real Origin header for CORS.
+  getDownloadUrl: (code, contentId) =>
+    request(`/sessions/${code}/content/${contentId}/download?redirect=false`),
 };
 
 export function wsUrl(code) {

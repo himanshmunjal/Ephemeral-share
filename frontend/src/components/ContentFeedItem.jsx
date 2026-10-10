@@ -63,10 +63,18 @@ export default function ContentFeedItem({ item, code, encKey }) {
   async function handleDownload() {
     if (!encKey || !meta) return;
     setDownloading(true);
+    let encrypted;
     try {
-      const res = await fetch(api.downloadUrl(code, item.id));
-      if (!res.ok) throw new Error("Download failed");
-      const encrypted = await res.arrayBuffer();
+      const { download_url: url } = await api.getDownloadUrl(code, item.id);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      encrypted = await res.arrayBuffer();
+    } catch (e) {
+      toast.error(e.message || "Download failed");
+      setDownloading(false);
+      return;
+    }
+    try {
       const plain = await decryptBytes(encKey, encrypted);
       const blob = new Blob([plain], { type: meta.type });
       const url = URL.createObjectURL(blob);

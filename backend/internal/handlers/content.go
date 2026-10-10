@@ -216,6 +216,13 @@ func (h *ContentHandler) DownloadContent(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate download link"})
 				return
 			}
+			// fetch() following a cross-origin redirect sends "Origin: null",
+			// which the object store's CORS policy rejects — so JS callers ask
+			// for the URL as JSON and fetch it directly instead.
+			if c.Query("redirect") == "false" {
+				c.JSON(http.StatusOK, gin.H{"download_url": url})
+				return
+			}
 			c.Redirect(http.StatusFound, url)
 			return
 		}
