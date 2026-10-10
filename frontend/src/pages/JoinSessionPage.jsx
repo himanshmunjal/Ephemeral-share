@@ -58,7 +58,7 @@ export default function JoinSessionPage() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="e.g. K7QX3M9P or a full link"
+          placeholder="e.g. K7QX3M or a full link"
           maxLength={300}
           autoFocus
           className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-center font-mono tracking-widest text-slate-900 uppercase placeholder:normal-case placeholder:tracking-normal dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"

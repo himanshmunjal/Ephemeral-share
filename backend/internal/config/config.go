@@ -70,7 +70,7 @@ func Load() *Config {
 		// "www" host (or a staging + prod frontend) without code changes.
 		AllowedOrigins:  splitOrigins(getEnv("ALLOWED_ORIGIN", "http://localhost:5173")),
 		RateLimitPerMin: getEnvInt("RATE_LIMIT_PER_MIN", 60),
-		CodeLength:      getEnvInt("CODE_LENGTH", 8),
+		CodeLength:      getEnvInt("CODE_LENGTH", 6),
 	}
 }
 
