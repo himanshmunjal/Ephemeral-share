@@ -7,3 +7,30 @@ frontend/dist
 frontend/node_modules
 backend/server
 *.log
+
+# Capacitor native build artifacts (android/ and ios/ project files are committed)
+frontend/android/build
+frontend/android/app/build
+frontend/android/.gradle
+frontend/android/local.properties
+frontend/android/capacitor-cordova-android-plugins
+frontend/ios/App/Pods
+frontend/ios/App/build
+frontend/ios/App/App/public
+frontend/ios/App/*.xcworkspace/xcuserdata
+frontend/ios/App/*.xcodeproj/xcuserdata
+
+# Personal interview notes
+INTERVIEW_PREP.md
+
+# Local version snapshots / archives
+URL Shortner Versions/
+*.zip
+
+# OS / editor clutter
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
