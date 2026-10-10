@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Ephemeral Share</string>
+    <string name="title_activity_main">Ephemeral Share</string>
+    <string name="package_name">com.ephemeralshare.app</string>
+    <string name="custom_url_scheme">com.ephemeralshare.app</string>
+</resources>
