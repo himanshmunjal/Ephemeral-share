@@ -75,14 +75,11 @@ func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
 		Filename:    req.Filename,
 		CreatedAt:   time.Now().UTC(),
 	}
-	// Record the pending item now; a lightweight periodic check could later
-	// confirm the object landed in S3 and drop unconfirmed entries.
-	if err := h.store.AddContent(c.Request.Context(), item); err != nil {
+	// Held as pending — invisible to other participants — until the uploader
+	// calls CompleteUpload after its direct-to-storage PUT succeeds.
+	if err := h.store.AddPendingUpload(c.Request.Context(), item); err != nil {
 		c.JSON(http.StatusGone, gin.H{"error": "session expired mid-upload"})
 		return
-	}
-	if h.stats != nil {
-		h.stats.IncrementFileShared(code)
 	}
 
 	c.JSON(http.StatusOK, models.UploadURLResponse{
@@ -90,6 +87,63 @@ func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
 		UploadURL: url,
 		ExpiresIn: 120,
 	})
+}
+
+// CompleteUpload — POST /api/v1/sessions/:code/content/:id/complete
+// Called by the uploader once its direct-to-storage PUT succeeds. Only then
+// does the file join the session's content list and get broadcast, so nobody
+// sees (or tries to download) a half-uploaded file.
+func (h *ContentHandler) CompleteUpload(c *gin.Context) {
+	if !h.requireLiveSession(c) {
+		return
+	}
+	ctx := c.Request.Context()
+	code := c.Param("code")
+	id := c.Param("id")
+
+	pending, err := h.store.GetPendingUpload(ctx, code, id)
+	if err == redis.Nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "upload not found or already completed"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		return
+	}
+
+	// Verify against what actually landed in storage rather than trusting the
+	// client: the object must exist, and the pre-signed PUT doesn't enforce
+	// the size limit, so check it here.
+	size, err := h.s3.ObjectSize(ctx, pending.StorageKey)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "file has not finished uploading"})
+		return
+	}
+	if size > h.cfg.MaxUploadBytes {
+		_ = h.s3.DeleteObject(ctx, pending.StorageKey)
+		_, _ = h.store.TakePendingUpload(ctx, code, id)
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds size limit"})
+		return
+	}
+
+	item, err := h.store.TakePendingUpload(ctx, code, id)
+	if err == redis.Nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "upload not found or already completed"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		return
+	}
+	item.SizeBytes = size
+	if err := h.store.AddContent(ctx, *item); err != nil {
+		c.JSON(http.StatusGone, gin.H{"error": "session expired mid-upload"})
+		return
+	}
+	if h.stats != nil {
+		h.stats.IncrementFileShared(code)
+	}
+	c.JSON(http.StatusCreated, item)
 }
 
 // AddTextContent — POST /api/v1/sessions/:code/content/text

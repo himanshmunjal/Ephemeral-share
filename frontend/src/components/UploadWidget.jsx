@@ -22,8 +22,9 @@ export default function UploadWidget({ code, encKey, onUploaded }) {
       });
       const blob = new Blob([encryptedBytes], { type: "application/octet-stream" });
 
-      const { upload_url: uploadUrl } = await api.requestUploadUrl(code, encryptedFilename, "application/octet-stream", blob.size);
+      const { upload_url: uploadUrl, content_id: contentId } = await api.requestUploadUrl(code, encryptedFilename, "application/octet-stream", blob.size);
       await api.uploadToPresignedUrl(uploadUrl, blob, setProgress);
+      await api.completeUpload(code, contentId);
       onUploaded?.();
     } catch (e) {
       toast.error(e.message || "Upload failed");

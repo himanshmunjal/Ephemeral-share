@@ -35,6 +35,7 @@ func NewRouter(store *redisclient.Store, s3 *storage.Client, cfg *config.Config,
 		api.DELETE("/sessions/:code", sessionH.DeleteSession)
 
 		api.POST("/sessions/:code/content/upload-url", contentH.RequestUploadURL)
+		api.POST("/sessions/:code/content/:id/complete", contentH.CompleteUpload)
 		api.POST("/sessions/:code/content/text", contentH.AddTextContent)
 		api.GET("/sessions/:code/content", contentH.ListContent)
 		api.GET("/sessions/:code/content/:id/download", contentH.DownloadContent)

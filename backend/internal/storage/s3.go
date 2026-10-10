@@ -101,6 +101,19 @@ func (c *Client) PresignGetURL(ctx context.Context, storageKey string, expiresIn
 	return req.URL, nil
 }
 
+// ObjectSize returns the stored size of an object, or an error if it doesn't
+// exist (e.g. the browser's direct upload never finished).
+func (c *Client) ObjectSize(ctx context.Context, storageKey string) (int64, error) {
+	out, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(storageKey),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return aws.ToInt64(out.ContentLength), nil
+}
+
 // DeleteObject removes a single object (used by session cleanup).
 func (c *Client) DeleteObject(ctx context.Context, storageKey string) error {
 	_, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{

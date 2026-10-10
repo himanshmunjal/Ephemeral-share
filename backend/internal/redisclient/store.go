@@ -28,6 +28,9 @@ func sessionKey(code string) string         { return fmt.Sprintf("session:%s", c
 func contentListKey(code string) string     { return fmt.Sprintf("session:%s:content", code) }
 func contentItemKey(code, id string) string { return fmt.Sprintf("session:%s:content:%s", code, id) }
 func participantsKey(code string) string    { return fmt.Sprintf("session:%s:participants", code) }
+func pendingUploadKey(code, id string) string {
+	return fmt.Sprintf("session:%s:pending:%s", code, id)
+}
 func wsChannel(code string) string          { return fmt.Sprintf("ws:%s", code) }
 
 // sessionRecord/contentRecord are the on-disk shapes used for Redis persistence.
@@ -173,6 +176,49 @@ func (s *Store) AddContent(ctx context.Context, item models.ContentItem) error {
 		"item":  item,
 	}))
 	return nil
+}
+
+// AddPendingUpload records a file item whose bytes haven't landed in object
+// storage yet. It stays out of the content list (and isn't broadcast) until
+// TakePendingUpload promotes it via AddContent.
+func (s *Store) AddPendingUpload(ctx context.Context, item models.ContentItem) error {
+	remaining, err := s.TTLRemaining(ctx, item.SessionCode)
+	if err != nil {
+		return err
+	}
+	if remaining <= 0 {
+		return fmt.Errorf("session expired")
+	}
+	data, err := json.Marshal(toContentRecord(item))
+	if err != nil {
+		return err
+	}
+	return s.rdb.Set(ctx, pendingUploadKey(item.SessionCode, item.ID), data, remaining).Err()
+}
+
+// GetPendingUpload returns a pending upload without consuming it. Returns
+// redis.Nil if there is no such pending upload.
+func (s *Store) GetPendingUpload(ctx context.Context, code, id string) (*models.ContentItem, error) {
+	return decodeContent(s.rdb.Get(ctx, pendingUploadKey(code, id)).Bytes())
+}
+
+// TakePendingUpload atomically removes and returns a pending upload, so each
+// upload can be completed (and broadcast) only once. Returns redis.Nil if it
+// was already taken.
+func (s *Store) TakePendingUpload(ctx context.Context, code, id string) (*models.ContentItem, error) {
+	return decodeContent(s.rdb.GetDel(ctx, pendingUploadKey(code, id)).Bytes())
+}
+
+func decodeContent(data []byte, err error) (*models.ContentItem, error) {
+	if err != nil {
+		return nil, err
+	}
+	var rec contentRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil, err
+	}
+	item := rec.toModel()
+	return &item, nil
 }
 
 // ListContent returns all content items currently in the session, in order.

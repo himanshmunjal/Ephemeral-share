@@ -40,6 +40,11 @@ export const api = {
       body: JSON.stringify({ filename, content_type: contentType, size_bytes: sizeBytes }),
     }),
 
+  // Tells the backend the direct-to-storage upload finished, which is what
+  // makes the file visible (and broadcast) to everyone else in the session.
+  completeUpload: (code, contentId) =>
+    request(`/sessions/${code}/content/${contentId}/complete`, { method: "POST" }),
+
   // Uploads the raw file straight to object storage via the pre-signed URL.
   uploadToPresignedUrl: (url, file, onProgress) =>
     new Promise((resolve, reject) => {
