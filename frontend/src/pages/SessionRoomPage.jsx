@@ -88,14 +88,26 @@ export default function SessionRoomPage() {
     })();
   }, [code, refreshContent]);
 
-  // Live updates for Shared Workspace sessions.
-  useSessionSocket(session?.type === "shared_workspace" ? code : null, (evt) => {
-    if (evt.event === "content_added") {
-      refreshContent();
-      toast.info("New content shared", 2000);
-    }
-    if (evt.event === "session_expired") navigate("/", { replace: true, state: { expired: true } });
-  });
+  // Live updates: new content appears and session termination is reflected
+  // for everyone in the session without a reload.
+  useSessionSocket(
+    session ? code : null,
+    (evt) => {
+      if (evt.event === "content_added") {
+        refreshContent();
+        toast.info("New content shared", 2000);
+      }
+      if (evt.event === "session_ended") {
+        if (!isOwner) toast.info("The host ended this session");
+        navigate("/", { replace: true, state: { expired: true } });
+      }
+      if (evt.event === "session_expired") {
+        toast.info("This session has expired");
+        navigate("/", { replace: true, state: { expired: true } });
+      }
+    },
+    refreshContent
+  );
 
   useEffect(() => {
     if (session && remaining <= 0) {

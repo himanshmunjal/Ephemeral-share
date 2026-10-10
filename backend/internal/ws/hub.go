@@ -54,6 +54,10 @@ func (h *Hub) listen(ctx context.Context) {
 				return
 			}
 			h.broadcast([]byte(msg.Payload))
+			if msg.Payload == sessionEndedEvent {
+				h.shutdown()
+				return
+			}
 		}
 	}
 }
@@ -95,6 +99,10 @@ func (h *Hub) Unregister(conn *websocket.Conn) {
 	}
 }
 
+// sessionEndedEvent is published by redisclient.Store.DeleteSession when the
+// owner ends a session early.
+const sessionEndedEvent = `{"event":"session_ended"}`
+
 // NotifyExpired force-broadcasts a session_expired event and clears the hub.
 func NotifyExpired(code string) {
 	hubsMu.Lock()
@@ -104,6 +112,11 @@ func NotifyExpired(code string) {
 		return
 	}
 	h.broadcast([]byte(`{"event":"session_expired"}`))
+	h.shutdown()
+}
+
+// shutdown force-closes every client and removes the hub.
+func (h *Hub) shutdown() {
 	h.mu.Lock()
 	for conn := range h.clients {
 		conn.Close()
@@ -111,6 +124,8 @@ func NotifyExpired(code string) {
 	h.mu.Unlock()
 	h.cancel()
 	hubsMu.Lock()
-	delete(hubs, code)
+	if hubs[h.code] == h {
+		delete(hubs, h.code)
+	}
 	hubsMu.Unlock()
 }

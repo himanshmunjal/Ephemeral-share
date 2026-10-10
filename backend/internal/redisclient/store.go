@@ -282,7 +282,13 @@ func (s *Store) DeleteSession(ctx context.Context, code string) error {
 	for _, id := range ids {
 		keys = append(keys, contentItemKey(code, id))
 	}
-	return s.rdb.Del(ctx, keys...).Err()
+	if err := s.rdb.Del(ctx, keys...).Err(); err != nil {
+		return err
+	}
+	// An explicit DEL fires no "expired" keyspace event, so tell connected
+	// clients (on every instance) directly that the session is gone.
+	s.rdb.Publish(ctx, wsChannel(code), mustJSON(map[string]any{"event": "session_ended"}))
+	return nil
 }
 
 func mustJSON(v any) string {
