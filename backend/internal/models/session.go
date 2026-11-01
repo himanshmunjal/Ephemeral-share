@@ -26,6 +26,14 @@ type Session struct {
 	OwnerToken      string      `json:"-"`
 }
 
+// Limits are the per-session quotas exposed to clients so the UI can
+// pre-validate. The server enforces them regardless.
+type Limits struct {
+	MaxFileBytes    int64 `json:"max_file_bytes"`
+	MaxFiles        int   `json:"max_files"`
+	MaxSessionBytes int64 `json:"max_session_bytes"`
+}
+
 // ContentItem represents one piece of shared content (file or text) in a session.
 type ContentItem struct {
 	ID          string      `json:"id"`
@@ -38,9 +46,17 @@ type ContentItem struct {
 	// Filename carries the client-side-encrypted {name, mime} envelope for
 	// file items (base64url AES-GCM ciphertext) — opaque to the server, which
 	// never sees the real filename or MIME type. Doubles as the S3 key suffix.
-	Filename    string      `json:"filename,omitempty"`
-	DownloadURL string      `json:"download_url,omitempty"`
-	CreatedAt   time.Time   `json:"created_at"`
+	Filename    string    `json:"filename,omitempty"`
+	DownloadURL string    `json:"download_url,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	// UploaderID is the random per-browser id sent in X-Participant-ID. It is
+	// never serialised to other clients (that would let anyone spoof it to
+	// delete someone else's item); they only get the computed Mine flag.
+	UploaderID string `json:"-"`
+	Mine       bool   `json:"mine,omitempty"`
+	// Who is the uploader's display identity, encrypted in the browser with
+	// the session key (opaque to the server, like filenames and text).
+	Who string `json:"who,omitempty"`
 }
 
 // CreateSessionRequest is the payload for POST /api/v1/sessions
@@ -51,9 +67,10 @@ type CreateSessionRequest struct {
 
 // CreateSessionResponse returned after successful creation.
 type CreateSessionResponse struct {
-	Code      string    `json:"code"`
-	Type      SessionType `json:"type"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Code       string      `json:"code"`
+	Type       SessionType `json:"type"`
+	ExpiresAt  time.Time   `json:"expires_at"`
+	OwnerToken string      `json:"owner_token"`
 }
 
 // AddTextContentRequest for text/note/url/snippet uploads.

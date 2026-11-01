@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -128,4 +129,21 @@ func (h *Hub) shutdown() {
 		delete(hubs, h.code)
 	}
 	hubsMu.Unlock()
+}
+
+// WriteTo sends one frame to a single client, serialised with broadcasts
+// (gorilla/websocket forbids concurrent writers on a connection).
+func (h *Hub) WriteTo(conn *websocket.Conn, payload []byte) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+// Ping sends a control ping; the client's pong refreshes presence and keeps
+// idle-timeout proxies (Railway, Cloudflare) from dropping the socket.
+func (h *Hub) Ping(conn *websocket.Conn) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
 }

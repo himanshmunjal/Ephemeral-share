@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,7 +14,7 @@ import (
 
 // Client wraps an S3-compatible client (works with AWS S3, Cloudflare R2, or MinIO).
 type Client struct {
-	s3      *s3.Client // internal endpoint: used for server-side calls (list/delete)
+	s3      *s3.Client        // internal endpoint: used for server-side calls (list/delete)
 	presign *s3.PresignClient // public endpoint: URLs handed to the browser
 	bucket  string
 }
@@ -76,13 +77,21 @@ func objectKey(sessionCode, contentID, filename string) string {
 
 // PresignPutURL returns a short-lived URL the client uploads directly to,
 // keeping large binaries off the API server entirely.
-func (c *Client) PresignPutURL(ctx context.Context, sessionCode, contentID, filename, contentType string, expiresIn time.Duration) (string, string, error) {
+func (c *Client) PresignPutURL(ctx context.Context, sessionCode, contentID, filename, contentType string, size int64, signLength bool, expiresIn time.Duration) (string, string, error) {
 	key := objectKey(sessionCode, contentID, filename)
-	req, err := c.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+	in := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		ContentType: aws.String(contentType),
-	}, s3.WithPresignExpires(expiresIn))
+	}
+	if signLength {
+		// Signed into the URL: object storage rejects a PUT whose body length
+		// differs, so the size the quota was reserved for can't be exceeded.
+		// When disabled, CompleteUpload's size check (and deletion on
+		// mismatch) is the only enforcement.
+		in.ContentLength = aws.Int64(size)
+	}
+	req, err := c.presign.PresignPutObject(ctx, in, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		return "", "", err
 	}
@@ -94,6 +103,10 @@ func (c *Client) PresignGetURL(ctx context.Context, storageKey string, expiresIn
 	req, err := c.presign.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(storageKey),
+		// Never let the browser render a stored object inline: force a
+		// download of opaque bytes.
+		ResponseContentDisposition: aws.String("attachment"),
+		ResponseContentType:        aws.String("application/octet-stream"),
 	}, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		return "", err
@@ -123,23 +136,62 @@ func (c *Client) DeleteObject(ctx context.Context, storageKey string) error {
 	return err
 }
 
-// DeleteSessionObjects removes every object under a session's prefix (bulk cleanup).
+// DeleteSessionObjects removes every object under a session's prefix (bulk
+// cleanup), following pagination so sessions with >1000 objects are fully purged.
 func (c *Client) DeleteSessionObjects(ctx context.Context, sessionCode string) error {
 	prefix := fmt.Sprintf("sessions/%s/", sessionCode)
-	out, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	p := s3.NewListObjectsV2Paginator(c.s3, &s3.ListObjectsV2Input{
 		Bucket: aws.String(c.bucket),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return err
-	}
-	for _, obj := range out.Contents {
-		if _, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(c.bucket),
-			Key:    obj.Key,
-		}); err != nil {
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
 			return err
+		}
+		for _, obj := range page.Contents {
+			if err := c.DeleteObject(ctx, aws.ToString(obj.Key)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// StoredObject is one entry returned by ListSessionObjects.
+type StoredObject struct {
+	Key          string
+	SessionCode  string
+	LastModified time.Time
+}
+
+// ListSessionObjects walks every object under "sessions/" so the orphan sweep
+// can compare them with live sessions.
+func (c *Client) ListSessionObjects(ctx context.Context) ([]StoredObject, error) {
+	var out []StoredObject
+	p := s3.NewListObjectsV2Paginator(c.s3, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String("sessions/"),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range page.Contents {
+			key := aws.ToString(obj.Key)
+			parts := strings.SplitN(key, "/", 3)
+			if len(parts) < 3 {
+				continue
+			}
+			out = append(out, StoredObject{Key: key, SessionCode: parts[1], LastModified: aws.ToTime(obj.LastModified)})
+		}
+	}
+	return out, nil
+}
+
+// Ping verifies the bucket is reachable (used by deep health checks).
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.s3.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.bucket)})
+	return err
 }
