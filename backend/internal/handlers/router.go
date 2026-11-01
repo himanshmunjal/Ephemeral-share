@@ -96,6 +96,7 @@ func NewRouter(store *redisclient.Store, s3 *storage.Client, cfg *config.Config,
 
 	if cfg.AdminToken != "" {
 		r.DELETE("/admin/sessions/:code", middleware.RateLimit(30), sessionH.AdminDeleteSession)
+		r.GET("/admin/diag/ip", middleware.RateLimit(30), sessionH.AdminDiagIP)
 	}
 
 	r.GET("/ws/sessions/:code", socket, wsH.HandleConnection)
@@ -111,12 +112,45 @@ var privateRanges = []string{
 	"fc00::/7", "fe80::/10",
 }
 
+// cloudflareRanges are Cloudflare's published edge ranges
+// (https://www.cloudflare.com/ips/). Platforms such as Render sit behind
+// Cloudflare, which appears in X-Forwarded-For just before the real visitor;
+// without trusting it, every visitor would look like a Cloudflare edge address
+// and share one rate limit and lockout. Refresh from that page if it changes.
+var cloudflareRanges = []string{
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+	"2400:cb00::/32",
+	"2606:4700::/32",
+	"2803:f800::/32",
+	"2405:b500::/32",
+	"2405:8100::/32",
+	"2a06:98c0::/29",
+	"2c0f:f248::/32",
+}
+
 func expandProxies(in []string) []string {
 	var out []string
 	for _, p := range in {
-		if p == "private" {
+		switch p {
+		case "private":
 			out = append(out, privateRanges...)
-		} else {
+		case "cloudflare":
+			out = append(out, cloudflareRanges...)
+		default:
 			out = append(out, p)
 		}
 	}

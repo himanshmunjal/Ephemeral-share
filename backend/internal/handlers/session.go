@@ -192,3 +192,27 @@ func (h *SessionHandler) terminate(ctx context.Context, code string) {
 		h.stats.MarkSessionEnded(code)
 	}
 }
+
+// AdminDiagIP — GET /admin/diag/ip
+// Shows how the server resolved the caller's address, so the operator can
+// confirm TRUSTED_PROXIES / CLIENT_IP_HEADER yield the real visitor IP rather
+// than a proxy's. Admin-token protected; returns only network metadata.
+func (h *SessionHandler) AdminDiagIP(c *gin.Context) {
+	if !tokenEquals(c.GetHeader("X-Admin-Token"), h.cfg.AdminToken) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	hdr := func(n string) string { return c.GetHeader(n) }
+	c.JSON(http.StatusOK, gin.H{
+		"client_ip":   c.ClientIP(),
+		"remote_addr": c.Request.RemoteAddr,
+		"headers": gin.H{
+			"x_forwarded_for":  hdr("X-Forwarded-For"),
+			"x_real_ip":        hdr("X-Real-IP"),
+			"cf_connecting_ip": hdr("CF-Connecting-IP"),
+			"true_client_ip":   hdr("True-Client-IP"),
+		},
+		"trusted_proxies":  h.cfg.TrustedProxies,
+		"client_ip_header": h.cfg.ClientIPHeader,
+	})
+}

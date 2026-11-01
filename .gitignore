@@ -34,3 +34,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Local cloud-test credentials (copy .env.cloud.example to .env.cloud)
+.env.cloud
+backend/.env.cloud

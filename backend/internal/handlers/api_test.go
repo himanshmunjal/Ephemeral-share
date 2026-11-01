@@ -265,8 +265,10 @@ func TestAdminTakedown(t *testing.T) {
 	}
 
 	// Without ADMIN_TOKEN the route doesn't exist at all.
-	if r := newEnv(t).do("DELETE", "/admin/sessions/ABCDEFGH", nil, "X-Admin-Token", token); r.Status != 404 {
-		t.Errorf("admin route should be disabled by default, got %d", r.Status)
+	// Without ADMIN_TOKEN the route must not exist at all: gin's plain-text 404,
+	// not our JSON "session not found" (which would mean the route is live).
+	if r := newEnv(t).do("DELETE", "/admin/sessions/ABCDEFGH", nil, "X-Admin-Token", token); r.Status != 404 || r.Body != nil {
+		t.Errorf("admin route should be disabled by default, got %d %v", r.Status, r.Body)
 	}
 }
 
@@ -468,5 +470,38 @@ func TestContentLengthSigningCanBeDisabledForPickyStorage(t *testing.T) {
 	}
 	if e.s3.has("sessions/" + code + "/") {
 		t.Error("the mismatched object should have been deleted")
+	}
+}
+
+func TestClientIPBehindCloudflare(t *testing.T) {
+	e := newEnv(t, "TRUSTED_PROXIES=private,cloudflare")
+	code, _ := e.newSession("quick_transfer")
+	// Render-style chain: "<visitor>, <cloudflare edge>" arriving via a private hop.
+	chain := func(visitor string) string { return visitor + ", 104.22.72.53" }
+
+	for i := 0; i < 5; i++ {
+		e.do("GET", "/api/v1/sessions/NOPE0000", nil, "X-Forwarded-For", chain("9.9.9.9"))
+	}
+	if r := e.do("GET", "/api/v1/sessions/"+code, nil, "X-Forwarded-For", chain("9.9.9.9")); r.Status != 429 {
+		t.Errorf("the offending visitor should be locked out, got %d", r.Status)
+	}
+	// Another visitor on the SAME Cloudflare edge must not be affected.
+	if r := e.do("GET", "/api/v1/sessions/"+code, nil, "X-Forwarded-For", chain("8.8.8.8")); r.Status != 200 {
+		t.Errorf("a different visitor behind the same edge was blocked: %d", r.Status)
+	}
+}
+
+func TestIPDiagnosticsAreAdminOnlyAndShowResolvedClient(t *testing.T) {
+	token := strings.Repeat("d", 32)
+	e := newEnv(t, "ADMIN_TOKEN="+token, "TRUSTED_PROXIES=private,cloudflare")
+	if r := e.do("GET", "/admin/diag/ip", nil); r.Status != 403 {
+		t.Errorf("no token: %d, want 403", r.Status)
+	}
+	r := e.do("GET", "/admin/diag/ip", nil, "X-Admin-Token", token, "X-Forwarded-For", "7.7.7.7, 104.22.72.53")
+	if r.Status != 200 || r.Body["client_ip"] != "7.7.7.7" {
+		t.Errorf("diagnostics should report the real visitor, got %d %v", r.Status, r.Body)
+	}
+	if r := newEnv(t).do("GET", "/admin/diag/ip", nil, "X-Admin-Token", token); r.Status != 404 {
+		t.Errorf("route must not exist without ADMIN_TOKEN, got %d", r.Status)
 	}
 }

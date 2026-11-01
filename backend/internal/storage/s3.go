@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // Client wraps an S3-compatible client (works with AWS S3, Cloudflare R2, or MinIO).
@@ -193,5 +194,64 @@ func (c *Client) ListSessionObjects(ctx context.Context) ([]StoredObject, error)
 // Ping verifies the bucket is reachable (used by deep health checks).
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.s3.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.bucket)})
+	return err
+}
+
+// CountObjectVersions returns how many versions (including hidden/delete
+// markers) exist under a prefix. Stores that keep old versions (Backblaze B2's
+// default) keep counting them against quota after a delete, so the pre-flight
+// check uses this to tell the operator when a lifecycle rule is needed.
+func (c *Client) CountObjectVersions(ctx context.Context, prefix string) (int, error) {
+	n := 0
+	p := s3.NewListObjectVersionsPaginator(c.s3, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String(prefix),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		n += len(page.Versions) + len(page.DeleteMarkers)
+	}
+	return n, nil
+}
+
+// CORSRule is a simplified view of one bucket CORS rule.
+type CORSRule struct {
+	Origins, Methods, Headers, Expose []string
+	MaxAgeSeconds                     int32
+}
+
+// GetBucketCORS reads the bucket's current CORS rules (for diagnostics).
+func (c *Client) GetBucketCORS(ctx context.Context) ([]CORSRule, error) {
+	out, err := c.s3.GetBucketCors(ctx, &s3.GetBucketCorsInput{Bucket: aws.String(c.bucket)})
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]CORSRule, 0, len(out.CORSRules))
+	for _, r := range out.CORSRules {
+		rules = append(rules, CORSRule{
+			Origins: r.AllowedOrigins, Methods: r.AllowedMethods, Headers: r.AllowedHeaders,
+			Expose: r.ExposeHeaders, MaxAgeSeconds: aws.ToInt32(r.MaxAgeSeconds),
+		})
+	}
+	return rules, nil
+}
+
+// SetBucketCORS replaces the bucket's CORS rules with one rule that lets the
+// given origins upload (PUT), download (GET) and probe (HEAD) directly from the
+// browser using pre-signed URLs.
+func (c *Client) SetBucketCORS(ctx context.Context, origins []string) error {
+	_, err := c.s3.PutBucketCors(ctx, &s3.PutBucketCorsInput{
+		Bucket: aws.String(c.bucket),
+		CORSConfiguration: &types.CORSConfiguration{CORSRules: []types.CORSRule{{
+			AllowedOrigins: origins,
+			AllowedMethods: []string{"GET", "PUT", "HEAD"},
+			AllowedHeaders: []string{"*"},
+			ExposeHeaders:  []string{"ETag"},
+			MaxAgeSeconds:  aws.Int32(3000),
+		}}},
+	})
 	return err
 }

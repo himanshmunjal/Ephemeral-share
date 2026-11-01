@@ -156,6 +156,13 @@ func newEnv(t *testing.T, overrides ...string) *env {
 		"MAX_FAILED_LOOKUPS":    "5",
 		"RATE_LIMIT_PER_MIN":    "600",
 		"ORPHAN_GRACE_SECONDS":  "1",
+		// Start every environment clean so settings can't leak between
+		// environments created within the same test.
+		"ADMIN_TOKEN":               "",
+		"TRUSTED_PROXIES":           "",
+		"CLIENT_IP_HEADER":          "",
+		"SIGN_CONTENT_LENGTH":       "",
+		"UPLOAD_RATE_LIMIT_PER_MIN": "",
 	}
 	for _, o := range overrides {
 		k, v, _ := strings.Cut(o, "=")
