@@ -34,7 +34,7 @@ Use this if you don't want to add a card to Cloudflare. Backblaze advertises a f
 
 ## Step 2A — Redis on Upstash (Path A)
 
-1. Create an Upstash Redis database (pick a region near your backend).
+1. Create an Upstash Redis database **in the same region as your backend** (e.g. Singapore for a Singapore Render service). The API makes at least one Redis round trip per request, so distance multiplies directly into latency: measured on a Mumbai database from a Singapore backend, each round trip cost ~0.4 s.
 2. Note the **endpoint host**, port (6379) and **password**. Upstash only accepts TLS, so you'll set `REDIS_TLS=true`.
 3. The backend runs `CONFIG SET notify-keyspace-events Ex` at boot; Upstash's docs say that parameter is settable. If boot reports it isn't, set `ALLOW_NO_KEYSPACE_EVENTS=true` — files are then removed by the orphan sweep within `ORPHAN_SWEEP_SECONDS` instead of instantly.
 4. **Command budget:** the free tier is limited per month (check the current number). Rough estimate: an hour-long session with three people uses on the order of 500–1,000 commands (heartbeats dominate), so budget for a few hundred sessions a month. Watch Upstash's usage graph during your trial.
@@ -96,6 +96,20 @@ Create Sentry projects (Go + Browser) and set `SENTRY_DSN` on the backend and `V
 3. Open the site in **two different browsers** (not two windows of one): create a session, join from the second, confirm "2 online" with two different anonymous names, upload a file in one, download it in the other, then delete it from the uploader's side. This also confirms R2 accepts the uploads (CORS + signed size).
 4. Enter ~11 wrong codes → "Too many wrong codes" screen.
 5. Takedown: `curl -X DELETE -H "X-Admin-Token: $ADMIN_TOKEN" https://<backend>/admin/sessions/<CODE>`.
+
+## If it feels slow
+
+Measure first (a request's time is roughly *Redis round trips × Redis latency*):
+
+```
+for i in 1 2 3; do curl -s -o /dev/null -w "%{time_total}s\n" https://<backend>/health; done
+```
+
+- **~0.1–0.2 s** is healthy (network + one Redis ping).
+- **0.5 s or more** for `/health` means Redis is far from the backend — put them in the same region.
+- **A minute on the first request** is the free instance waking from sleep; ping `/health` every ~10 minutes with a free uptime monitor.
+
+The backend is built to need few round trips (see ARCHITECTURE §9), so a nearby Redis makes it feel instant.
 
 ## Scaling notes
 

@@ -278,6 +278,19 @@ Limiter sizes derive from `RATE_LIMIT_PER_MIN`, `UPLOAD_RATE_LIMIT_PER_MIN` and 
 | Missed expiry event | `410` still fires at the exact expiry; orphan sweep removes files; bucket lifecycle is the last backstop. |
 | Duplicate completes | `GETDEL` makes completion idempotent. |
 
+### Performance budget: Redis round trips
+
+Against a managed/remote Redis, latency ≈ (round trips per request) × (round-trip time) — measured at ~0.4 s per trip from Render to a Redis in another region. So the code is written to minimise trips, and `TestRedisRoundTripBudgets` pins them:
+
+| Request | Round trips | How |
+|---|---|---|
+| `GET /sessions/:code`, `POST …/join` | 1 | `Store.Lookup` pipelines lockout counter, session, TTL and presence |
+| `GET …/content` | 2 | lookup + content ids in one pipeline, then one `MGET` (independent of item count) |
+| `POST …/content/text`, `…/upload-url` | 3 | lookup, one atomic quota script, one transaction that also publishes |
+| WebSocket connect | 3 | lookup, one script that joins, stores the identity and returns the roster, one publish |
+
+Rules of thumb: pass an already-fetched TTL instead of asking again; put the publish in the same transaction as the write; never loop per item. Co-locating Redis with the backend matters more than any code change.
+
 **Scaling path:** run N stateless replicas → managed Redis with keyspace events → R2/S3 (R2 has no egress fees) → move the per-replica token buckets into Redis for global limits (§11) → if Redis becomes the bottleneck, shard by session code (hash-tag `session:{CODE}` for Redis Cluster).
 
 ---
