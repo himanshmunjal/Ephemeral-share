@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif" fill="#222">
+  <defs>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#222"/>
+    </marker>
+    <marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f6f5c"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#ffffff"/>
+
+  <!-- Title + legend -->
+  <text x="40" y="52" font-size="26" font-weight="700">Ephemeral Share: architecture</text>
+  <line x1="1030" y1="45" x2="1080" y2="45" stroke="#1f6f5c" stroke-width="3.5"/>
+  <text x="1092" y="50" font-size="15">file bytes (encrypted, direct)</text>
+  <line x1="1340" y1="45" x2="1390" y2="45" stroke="#222" stroke-width="1.8"/>
+  <text x="1402" y="50" font-size="15">requests and events</text>
+
+  <!-- Layer boxes -->
+  <g fill="none" stroke="#222" stroke-width="1.2" stroke-dasharray="6 5">
+    <rect x="40" y="90" width="300" height="640" rx="10"/>
+    <rect x="540" y="90" width="440" height="640" rx="10"/>
+    <rect x="1180" y="90" width="380" height="640" rx="10"/>
+  </g>
+  <g font-size="15" font-weight="700" letter-spacing="1.5">
+    <text x="60" y="122">CLIENT</text>
+    <text x="560" y="122">API (GO SERVICE)</text>
+    <text x="1200" y="122">STATE AND STORAGE</text>
+  </g>
+
+  <!-- Component boxes -->
+  <g fill="#ffffff" stroke="#222" stroke-width="1.8">
+    <rect x="70" y="150" width="240" height="490" rx="8"/>
+    <rect x="570" y="150" width="380" height="170" rx="8"/>
+    <rect x="570" y="350" width="380" height="120" rx="8"/>
+    <rect x="570" y="500" width="380" height="120" rx="8"/>
+    <rect x="1210" y="255" width="320" height="325" rx="8"/>
+    <rect x="1210" y="620" width="320" height="90" rx="8"/>
+  </g>
+  <rect x="1210" y="150" width="320" height="70" rx="8" fill="#ffffff" stroke="#222" stroke-width="1.8" stroke-dasharray="6 5"/>
+  <rect x="90" y="470" width="200" height="150" rx="6" fill="#ffffff" stroke="#222" stroke-width="1.8"/>
+
+  <!-- React client -->
+  <g text-anchor="middle">
+    <text x="190" y="186" font-size="20" font-weight="700">React client</text>
+    <text x="190" y="214" font-size="15">React 18, Vite, Tailwind</text>
+    <text x="190" y="236" font-size="15">web, iOS, Android</text>
+    <text x="190" y="258" font-size="15">(Capacitor)</text>
+    <text x="190" y="304" font-size="15">upload queue, live feed,</text>
+    <text x="190" y="326" font-size="15">presence, display names</text>
+    <text x="190" y="372" font-size="15">sends X-Participant-ID,</text>
+    <text x="190" y="394" font-size="15">X-Owner-Token headers</text>
+
+    <text x="190" y="504" font-size="18" font-weight="700">Web Crypto</text>
+    <text x="190" y="532" font-size="15">PBKDF2 key from the code</text>
+    <text x="190" y="554" font-size="15">AES-GCM encrypts files,</text>
+    <text x="190" y="576" font-size="15">names, notes, identity</text>
+  </g>
+
+  <!-- Gin REST API -->
+  <g text-anchor="middle">
+    <text x="760" y="184" font-size="20" font-weight="700">Gin REST API</text>
+    <text x="760" y="212" font-size="15">rate limits, wrong-code lockout</text>
+    <text x="760" y="234" font-size="15">quotas, uploader-only delete</text>
+    <text x="760" y="256" font-size="15">pre-signed URLs, size check</text>
+    <text x="760" y="278" font-size="15">CORS, security headers, /health</text>
+    <text x="760" y="300" font-size="15">JSON logs, optional Sentry</text>
+  </g>
+
+  <!-- WebSocket hub -->
+  <g text-anchor="middle">
+    <text x="760" y="384" font-size="20" font-weight="700">WebSocket hub</text>
+    <text x="760" y="412" font-size="15">one hub per session</text>
+    <text x="760" y="434" font-size="15">presence heartbeat, live events</text>
+    <text x="760" y="456" font-size="15">participant cap per room</text>
+  </g>
+
+  <!-- Cleanup worker -->
+  <g text-anchor="middle">
+    <text x="760" y="534" font-size="20" font-weight="700">Cleanup worker</text>
+    <text x="760" y="562" font-size="15">deletes objects on key expiry</text>
+    <text x="760" y="584" font-size="15">orphan sweep every few minutes</text>
+    <text x="760" y="606" font-size="15">(covers restarts, missed events)</text>
+  </g>
+
+  <!-- PostgreSQL (optional) -->
+  <g text-anchor="middle">
+    <text x="1370" y="180" font-size="18" font-weight="700">PostgreSQL (optional)</text>
+    <text x="1370" y="204" font-size="15">aggregate stats only</text>
+  </g>
+
+  <!-- Redis -->
+  <g>
+    <text x="1370" y="288" font-size="20" font-weight="700" text-anchor="middle">Redis</text>
+    <text x="1370" y="312" font-size="15" text-anchor="middle">Upstash in production</text>
+    <text x="1236" y="356" font-size="15">session record with one TTL</text>
+    <text x="1236" y="384" font-size="15">quota counters (Lua scripts)</text>
+    <text x="1236" y="412" font-size="15">presence and encrypted names</text>
+    <text x="1236" y="440" font-size="15">wrong-code lockout counters</text>
+    <text x="1236" y="468" font-size="15">content items, pending uploads</text>
+    <text x="1236" y="496" font-size="15">pub/sub channel per session</text>
+    <text x="1236" y="524" font-size="15">every key shares the session TTL</text>
+  </g>
+
+  <!-- Object storage -->
+  <g text-anchor="middle">
+    <text x="1370" y="648" font-size="20" font-weight="700">Object storage</text>
+    <text x="1370" y="673" font-size="15">Backblaze B2, R2 or MinIO</text>
+    <text x="1370" y="695" font-size="15">ciphertext only</text>
+  </g>
+
+  <!-- Arrows: requests and events -->
+  <g fill="none" stroke="#222" stroke-width="1.8">
+    <path d="M312,200 H566" marker-end="url(#ag)"/>
+    <path d="M568,290 H314" marker-end="url(#ag)"/>
+    <path d="M312,410 H566" marker-start="url(#ag)" marker-end="url(#ag)"/>
+    <path d="M952,185 H1206" stroke-dasharray="6 5" marker-end="url(#ag)"/>
+    <path d="M952,290 H1206" marker-end="url(#ag)"/>
+    <path d="M1208,410 H954" marker-end="url(#ag)"/>
+    <path d="M1208,560 H954" marker-end="url(#ag)"/>
+    <path d="M952,600 H1195 V665 H1206" marker-end="url(#ag)"/>
+  </g>
+
+  <!-- Main data path: encrypted bytes straight to storage -->
+  <path d="M190,642 V790 H1370 V714" fill="none" stroke="#1f6f5c" stroke-width="3.5" marker-end="url(#aa)"/>
+
+  <!-- Arrow labels -->
+  <g font-size="14" text-anchor="middle">
+    <text x="440" y="188">REST + headers</text>
+    <text x="440" y="262">session data,</text>
+    <text x="440" y="279">pre-signed URL</text>
+    <text x="440" y="378">WebSocket:</text>
+    <text x="440" y="395">live events</text>
+    <text x="1080" y="173">async stats</text>
+    <text x="1080" y="263">lookups, quotas</text>
+    <text x="1080" y="280">(1 round trip)</text>
+    <text x="1080" y="398">pub/sub</text>
+    <text x="1080" y="548">key-expiry events</text>
+    <text x="1075" y="589">delete objects</text>
+  </g>
+  <text x="250" y="778" font-size="15" fill="#1f6f5c" font-weight="700">encrypted file bytes: pre-signed PUT / GET, direct to storage, never through the API</text>
+  <text x="40" y="862" font-size="15" fill="#555">Deployed on Vercel (client), Render (API), Upstash (Redis) and Backblaze B2 (storage). Every Redis key shares the session TTL, so nothing outlives the session.</text>
+</svg>

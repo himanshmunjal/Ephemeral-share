@@ -5,10 +5,20 @@ Share files and text between devices with a short access code. Every session (**
 **Stack:** Go 1.25 (Gin) · React 18 + Vite + Tailwind CSS · Redis 7 · S3-compatible storage (MinIO locally; Cloudflare R2 / AWS S3 in production) · optional PostgreSQL for aggregate stats · optional Sentry · Docker · Capacitor (iOS/Android wrapper)
 
 📐 System design, data flows, threat model: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-🚀 Step-by-step deploy (Vercel + Railway + Cloudflare R2): [`DEPLOY.md`](DEPLOY.md)
+🚀 Step-by-step deploy (Vercel, Render or Railway, Upstash, Backblaze B2 or Cloudflare R2): [`DEPLOY.md`](DEPLOY.md)
 ✅ Production checklist and rationale: [`PRODUCTION.md`](PRODUCTION.md)
 
 ---
+
+## Architecture
+
+![Ephemeral Share architecture: a React client with Web Crypto talks to a Go service (Gin REST API, WebSocket hub, Cleanup worker), which keeps state in Redis and sends encrypted file bytes directly to object storage via pre-signed URLs](docs/architecture.png)
+
+- **React client + Web Crypto** encrypts files, names, notes and display names in the browser, then talks JSON/WebSocket to the API.
+- **Gin REST API** enforces rate limits, the wrong-code lockout and quotas, and keeps all live state in **Redis** under one TTL. Every request costs a small, fixed number of Redis round trips (see [Performance](#performance)).
+- **File bytes never pass through the API.** The API issues pre-signed URLs and the browser talks to **Object storage** (Backblaze B2, R2 or MinIO) directly — the green path in the diagram.
+- **WebSocket hub** fans out presence and content events through Redis pub/sub. **Cleanup worker** deletes files on key expiry and runs an orphan sweep for anything left behind.
+- **PostgreSQL** is optional and only records aggregate stats. Full design, data flows and threat model: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Features
 
@@ -40,14 +50,6 @@ Share files and text between devices with a short access code. Every session (**
 Files, filenames, notes and display names are encrypted **in the browser** with AES-GCM-256 before upload; storage, Redis and the database only ever hold ciphertext. The key is derived from the access code (PBKDF2-SHA256, 100k iterations), so anyone with the code can decrypt, and there's no separate key to share.
 
 **This is not zero-knowledge against the operator.** The access code is also the session lookup key, so the server receives it on each request and could in principle use it to decrypt. It protects against leaked storage buckets, database dumps and storage providers — not against whoever runs the server. We don't store or log the code (logs record route patterns, and Sentry events are scrubbed), but that is practice, not a technical guarantee. The in-app Privacy page says the same. See [ARCHITECTURE §8.2](docs/ARCHITECTURE.md#82-client-side-encryption-frontendsrclibcryptojs).
-
-## Architecture at a glance
-
-```
- Browser (React) ──REST──▶  Go/Gin API ──▶ Redis      (live state, quotas, presence, TTL, pub/sub)
-       │         ◀──WS───       │     └──▶ PostgreSQL (optional, async aggregate stats)
-       └──── PUT/GET encrypted bytes via pre-signed URL ────▶ S3 / R2 / MinIO
-```
 
 ## Quick start (Docker Compose)
 
@@ -87,7 +89,21 @@ cd backend  && go test -race ./...     # integration tests: real router + in-mem
 cd frontend && npm test                # Vitest: crypto, identity, API client, scrubbing
 ```
 
-The backend suite exercises the HTTP API end to end — quotas, uploader-only delete, lockout, rate limits, presence cap over real WebSockets, admin takedown, CORS/security headers, health, and the orphan sweep — with no external services. GitHub Actions (`.github/workflows/ci.yml`) runs both suites plus `gofmt`, `go vet` and a production frontend build on every push and pull request.
+The backend has 33 tests and the frontend 20 (all passing at the time of writing). The backend suite exercises the HTTP API end to end — quotas, uploader-only delete, lockout, rate limits, presence cap over real WebSockets, admin takedown, CORS/security headers, health, and the orphan sweep — with no external services. GitHub Actions (`.github/workflows/ci.yml`) runs both suites plus `gofmt`, `go vet` and a production frontend build on every push and pull request.
+
+## Performance
+
+Latency against a remote Redis is (round trips per request) × (time per round trip), so the code is written to need few round trips and a test (`TestRedisRoundTripBudgets`) pins them. Counted with a client hook on the commit before the optimisation and on the current code, using the same test harness:
+
+| Request | Before | After |
+|---|---|---|
+| Fetch a session | 4 | **1** |
+| Join (capacity pre-check) | 3 | **1** |
+| Load a feed of 6 items | 9 | **2** |
+| Add a text note | 7 | **3** |
+| Request an upload URL | 6 | **3** |
+
+On the free-tier deployment (API in Singapore, Redis apparently in Mumbai) the *old* code measured 1.27–1.76 s to fetch a session and about 3.4 s to load a room, which works out to roughly 0.3 s per round trip. I have not yet re-measured the new code on that deployment. The largest remaining lever is configuration, not code: run Redis in the same region as the API. Details in [ARCHITECTURE §9](docs/ARCHITECTURE.md#9-scalability-and-reliability).
 
 ## Configuration
 
@@ -137,16 +153,18 @@ Base `/api/v1`; every request may carry `X-Participant-ID` (random per-browser i
 | WS | `/ws/sessions/:code?who=…` | Events: `presence`, `content_added`, `content_removed`, `session_ended`, `session_expired` |
 | GET | `/health` | Liveness + Redis check |
 | DELETE | `/admin/sessions/:code` | Operator takedown (needs `X-Admin-Token`; disabled unless configured) |
+| GET | `/admin/diag/ip` | Shows how the server resolved the caller's IP (needs `X-Admin-Token`); used to verify `TRUSTED_PROXIES` |
 
 ## Project layout
 
 ```
 backend/
   cmd/server/            entrypoint, boot checks, Sentry/log wiring
+  cmd/preflight/         pre-deploy check of Redis, object storage, CORS and signed uploads
   internal/config/       env config + production safety checks
   internal/handlers/     session, content, websocket, cleanup (+ orphan sweep), guard (lockout), router
   internal/middleware/   rate limiting, security headers, HTTPS, structured logging
-  internal/redisclient/  keys, TTL, quotas (Lua), presence, lockout counters, pub/sub
+  internal/redisclient/  keys, one-round-trip Lookup, quotas and presence (Lua), lockout counters, pub/sub
   internal/storage/      S3 client, pre-signing, paginated list/delete
   internal/ws/           per-session WebSocket hub (+ heartbeat)
   internal/monitoring/   optional Sentry with code scrubbing
@@ -158,11 +176,12 @@ frontend/
   vercel.json            routing + security headers for Vercel
 .github/workflows/       CI
 infra/                   MinIO bootstrap, bucket CORS template
+docs/                    architecture doc and diagram (architecture.svg / .png)
 ```
 
 ## Deploying
 
-Follow [`DEPLOY.md`](DEPLOY.md). `docker-compose.yml` and `.env.example` are local-dev only.
+Follow [`DEPLOY.md`](DEPLOY.md). `docker-compose.yml` and `.env.example` are local-dev only. Before deploying, copy `backend/.env.cloud.example` to `backend/.env.cloud`, fill in your Redis and storage settings, and run `cd backend && go run ./cmd/preflight -env .env.cloud`: it tests connectivity, TLS, Lua, pub/sub, pre-signed uploads and downloads, CORS for your frontend origin, and whether the signed-size setting works, without printing credentials.
 
 ## Status
 
