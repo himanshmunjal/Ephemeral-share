@@ -280,7 +280,7 @@ Limiter sizes derive from `RATE_LIMIT_PER_MIN`, `UPLOAD_RATE_LIMIT_PER_MIN` and 
 
 ### Performance budget: Redis round trips
 
-Against a managed/remote Redis, latency ≈ (round trips per request) × (round-trip time) — measured at ~0.4 s per trip from Render to a Redis in another region. So the code is written to minimise trips, and `TestRedisRoundTripBudgets` pins them:
+Against a managed/remote Redis, latency ≈ (round trips per request) × (round-trip time) — about 0.3 s per trip from Render (Singapore) to a Redis in another region, worked out as request time ÷ round trips on the live service. So the code is written to minimise trips, and `TestRedisRoundTripBudgets` pins them:
 
 | Request | Round trips | How |
 |---|---|---|
