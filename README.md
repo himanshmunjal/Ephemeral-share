@@ -107,7 +107,7 @@ Backend (environment variables; full annotated list in [`.env.production.example
 | `SIGN_CONTENT_LENGTH` | `true` | Sign the declared size into upload URLs; set `false` for S3-compatible stores that reject it |
 | `ORPHAN_SWEEP_SECONDS` / `ORPHAN_GRACE_SECONDS` | `600` / `600` | Orphaned-file sweep interval and minimum age |
 | `ALLOWED_ORIGIN` | `http://localhost:5173` | Comma-separated CORS + WebSocket origins |
-| `TRUSTED_PROXIES` | *(unset)* | `private` (or CIDRs): trust a platform proxy and read the real client IP from `X-Forwarded-For` |
+| `TRUSTED_PROXIES` | *(unset)* | `private`, `cloudflare` and/or CIDRs: trust platform proxies and read the real client IP from `X-Forwarded-For` |
 | `CLIENT_IP_HEADER` | *(unset)* | Alternative: a single-value header the platform overwrites (e.g. `CF-Connecting-IP`) |
 | `ENFORCE_HTTPS` | *(unset)* | `true` redirects plain-HTTP requests |
 | `ADMIN_TOKEN` | *(unset)* | Enables `DELETE /admin/sessions/:code` for takedowns |

@@ -55,7 +55,7 @@ Use this if you don't want to add a card to Cloudflare. Backblaze advertises a f
    S3_REGION=auto
    S3_ACCESS_KEY=...   S3_SECRET_KEY=...
    ALLOWED_ORIGIN=https://YOUR-APP.vercel.app
-   TRUSTED_PROXIES=private
+   TRUSTED_PROXIES=private,cloudflare
    ENFORCE_HTTPS=true
    ADMIN_TOKEN=<openssl rand -hex 32>
    ```
@@ -92,7 +92,7 @@ Create Sentry projects (Go + Browser) and set `SENTRY_DSN` on the backend and `V
 ## Step 6 — Verify (do not skip)
 
 1. `curl https://<backend>/health` → `{"status":"ok"}`.
-2. **Real client IPs:** load the site, then check the backend logs: the `ip` field must show *your public IP*, not an internal `10.x` address. If it shows an internal address, rate limits and lockouts would apply to everyone at once — fix `TRUSTED_PROXIES` before going public.
+2. **Real client IPs:** Render and similar hosts sit behind Cloudflare, so use `TRUSTED_PROXIES=private,cloudflare`. Then confirm with `curl -H "X-Admin-Token: $ADMIN_TOKEN" https://<backend>/admin/diag/ip` — `client_ip` must equal your public IP (compare with `curl ifconfig.me`), not a Cloudflare or internal address. If it doesn't, rate limits and lockouts would apply to many users at once; fix it before going public.
 3. Open the site in **two different browsers** (not two windows of one): create a session, join from the second, confirm "2 online" with two different anonymous names, upload a file in one, download it in the other, then delete it from the uploader's side. This also confirms R2 accepts the uploads (CORS + signed size).
 4. Enter ~11 wrong codes → "Too many wrong codes" screen.
 5. Takedown: `curl -X DELETE -H "X-Admin-Token: $ADMIN_TOKEN" https://<backend>/admin/sessions/<CODE>`.
