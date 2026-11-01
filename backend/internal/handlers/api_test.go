@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -503,5 +504,83 @@ func TestIPDiagnosticsAreAdminOnlyAndShowResolvedClient(t *testing.T) {
 	}
 	if r := newEnv(t).do("GET", "/admin/diag/ip", nil, "X-Admin-Token", token); r.Status != 404 {
 		t.Errorf("route must not exist without ADMIN_TOKEN, got %d", r.Status)
+	}
+}
+
+// ---- performance budget -----------------------------------------------------
+
+// Against a remote Redis every round trip costs real time (~0.4s measured from
+// Render to Upstash), so the number of round trips per request IS the latency.
+// These budgets pin the hot paths; raising one should be a deliberate decision.
+func TestRedisRoundTripBudgets(t *testing.T) {
+	e := newEnv(t)
+	var n atomic.Int64
+	e.store.CountRoundTrips(&n)
+
+	code, owner := e.newSession("shared_workspace")
+	base := "/api/v1/sessions/" + code
+	measure := func(f func()) int64 {
+		before := n.Load()
+		f()
+		return n.Load() - before
+	}
+	budget := func(name string, max int64, f func()) {
+		t.Helper()
+		f() // warm-up: the first call of each script costs an extra EVALSHA→EVAL
+		if got := measure(f); got > max {
+			t.Errorf("%s used %d Redis round trips, budget is %d", name, got, max)
+		} else {
+			t.Logf("%-22s %d round trip(s) (budget %d)", name, got, max)
+		}
+	}
+
+	budget("GET session", 1, func() { e.do("GET", base, nil) })
+	budget("POST join", 1, func() { e.do("POST", base+"/join", nil) })
+
+	// A feed with several items must still cost a constant number of trips.
+	for i := 0; i < 6; i++ {
+		e.do("POST", base+"/content/text", map[string]any{"content_type": "note", "text": "Y2lwaGVy"}, "X-Participant-ID", alice)
+	}
+	budget("GET content (6 items)", 2, func() { e.do("GET", base+"/content", nil, "X-Participant-ID", alice) })
+	budget("POST text note", 3, func() {
+		e.do("POST", base+"/content/text", map[string]any{"content_type": "note", "text": "Y2lwaGVy"}, "X-Participant-ID", alice)
+	})
+	// upload-url: measure only the request itself, then cancel to free quota.
+	for run := 0; run < 2; run++ { // first run is the warm-up
+		before := n.Load()
+		r := e.requestUpload(code, alice, 10)
+		got := n.Load() - before
+		if id, ok := r.Body["content_id"].(string); ok {
+			e.do("DELETE", base+"/content/"+id, nil, "X-Participant-ID", alice)
+		}
+		if run == 1 {
+			if got > 3 {
+				t.Errorf("POST upload-url used %d Redis round trips, budget is 3", got)
+			} else {
+				t.Logf("%-22s %d round trip(s) (budget 3)", "POST upload-url", got)
+			}
+		}
+	}
+	_ = owner
+}
+
+func TestFeedLoadDoesNotGrowWithItemCount(t *testing.T) {
+	e := newEnv(t, "MAX_TEXT_ITEMS_PER_SESSION=100")
+	var n atomic.Int64
+	e.store.CountRoundTrips(&n)
+	code, _ := e.newSession("quick_transfer")
+	path := "/api/v1/sessions/" + code + "/content"
+	cost := func() int64 {
+		e.do("GET", path, nil) // warm
+		before := n.Load()
+		e.do("GET", path, nil)
+		return n.Load() - before
+	}
+	empty := cost()
+	for i := 0; i < 30; i++ {
+		e.do("POST", path+"/text", map[string]any{"content_type": "note", "text": "Y2lwaGVy"})
+	}
+	if full := cost(); full != empty && full > 2 {
+		t.Errorf("loading 30 items cost %d round trips vs %d when empty — the feed must not do one lookup per item", full, empty)
 	}
 }

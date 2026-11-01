@@ -173,12 +173,10 @@ func (s *Store) CodeExists(ctx context.Context, code string) (bool, error) {
 	return n > 0, err
 }
 
-// AddContent appends a content item, capping its TTL to the session's remaining TTL.
-func (s *Store) AddContent(ctx context.Context, item models.ContentItem) error {
-	remaining, err := s.TTLRemaining(ctx, item.SessionCode)
-	if err != nil {
-		return err
-	}
+// AddContent appends a content item and broadcasts it, in ONE round trip.
+// `remaining` is the session's remaining TTL (from Lookup), so children never
+// outlive the session.
+func (s *Store) AddContent(ctx context.Context, item models.ContentItem, remaining time.Duration) error {
 	if remaining <= 0 {
 		return fmt.Errorf("session expired")
 	}
@@ -190,25 +188,19 @@ func (s *Store) AddContent(ctx context.Context, item models.ContentItem) error {
 	pipe.RPush(ctx, contentListKey(item.SessionCode), item.ID)
 	pipe.Expire(ctx, contentListKey(item.SessionCode), remaining)
 	pipe.Set(ctx, contentItemKey(item.SessionCode, item.ID), data, remaining)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-	// Publish for WebSocket fanout across instances.
-	s.rdb.Publish(ctx, wsChannel(item.SessionCode), mustJSON(map[string]any{
+	// Publish for WebSocket fan-out across instances.
+	pipe.Publish(ctx, wsChannel(item.SessionCode), mustJSON(map[string]any{
 		"event": "content_added",
 		"item":  item,
 	}))
-	return nil
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 // AddPendingUpload records a file item whose bytes haven't landed in object
 // storage yet. It stays out of the content list (and isn't broadcast) until
 // TakePendingUpload promotes it via AddContent.
-func (s *Store) AddPendingUpload(ctx context.Context, item models.ContentItem) error {
-	remaining, err := s.TTLRemaining(ctx, item.SessionCode)
-	if err != nil {
-		return err
-	}
+func (s *Store) AddPendingUpload(ctx context.Context, item models.ContentItem, remaining time.Duration) error {
 	if remaining <= 0 {
 		return fmt.Errorf("session expired")
 	}
@@ -244,23 +236,28 @@ func decodeContent(data []byte, err error) (*models.ContentItem, error) {
 	return &item, nil
 }
 
-// ListContent returns all content items currently in the session, in order.
-func (s *Store) ListContent(ctx context.Context, code string) ([]models.ContentItem, error) {
-	ids, err := s.rdb.LRange(ctx, contentListKey(code), 0, -1).Result()
+// GetContentItems loads the given content ids with a single MGET (it used to
+// be one round trip per item, which dominated page-load time on a remote Redis).
+func (s *Store) GetContentItems(ctx context.Context, code string, ids []string) ([]models.ContentItem, error) {
+	items := make([]models.ContentItem, 0, len(ids))
+	if len(ids) == 0 {
+		return items, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = contentItemKey(code, id)
+	}
+	vals, err := s.rdb.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, err
 	}
-	items := make([]models.ContentItem, 0, len(ids))
-	for _, id := range ids {
-		data, err := s.rdb.Get(ctx, contentItemKey(code, id)).Bytes()
-		if err == redis.Nil {
-			continue // item's individual key expired at exactly the same instant; skip
-		}
-		if err != nil {
-			return nil, err
+	for _, v := range vals {
+		str, ok := v.(string)
+		if !ok {
+			continue // that item's key expired at the same instant; skip
 		}
 		var rec contentRecord
-		if err := json.Unmarshal(data, &rec); err == nil {
+		if err := json.Unmarshal([]byte(str), &rec); err == nil {
 			items = append(items, rec.toModel())
 		}
 	}
@@ -345,9 +342,8 @@ return 1
 
 // ReserveQuota claims one slot (and `size` bytes) against the session quotas.
 // field is "files" or "texts".
-func (s *Store) ReserveQuota(ctx context.Context, code, field string, maxCount int, size, maxBytes int64) (int, error) {
-	remaining, err := s.TTLRemaining(ctx, code)
-	if err != nil || remaining <= 0 {
+func (s *Store) ReserveQuota(ctx context.Context, code, field string, maxCount int, size, maxBytes int64, remaining time.Duration) (int, error) {
+	if remaining <= 0 {
 		return 0, fmt.Errorf("session expired")
 	}
 	secs := int64(remaining.Seconds()) + 1
@@ -377,59 +373,89 @@ func (s *Store) RemoveContent(ctx context.Context, code, id string) error {
 	pipe := s.rdb.TxPipeline()
 	pipe.LRem(ctx, contentListKey(code), 0, id)
 	pipe.Del(ctx, contentItemKey(code, id))
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-	s.rdb.Publish(ctx, wsChannel(code), mustJSON(map[string]any{"event": "content_removed", "id": id}))
-	return nil
+	pipe.Publish(ctx, wsChannel(code), mustJSON(map[string]any{"event": "content_removed", "id": id}))
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // ---- presence (live user count) ------------------------------------------
 
 const presenceStale = 75 * time.Second
 
-// presenceJoinScript drops stale members, then admits the connection only if
-// the cap isn't reached. Returns the new count, or -1 when the room is full.
-// KEYS[1]=presence zset; ARGV: now, staleBefore, member, max, ttlSeconds.
+// presenceSnapshotLua builds the {id, who, id, who, ...} list of live
+// connections. Shared by the join and snapshot scripts so a join returns the
+// roster in the same round trip. KEYS[1]=presence zset, KEYS[2]=who hash,
+// ARGV[2]=stale-before timestamp.
+const presenceSnapshotLua = `
+local ids = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[2], '+inf')
+local out = {}
+for _, id in ipairs(ids) do
+  local w = redis.call('HGET', KEYS[2], id)
+  if not w then w = '' end
+  out[#out + 1] = id
+  out[#out + 1] = w
+end
+`
+
+// presenceJoinScript drops stale members, admits the connection only if the
+// room has space, records its encrypted identity, and returns the roster.
+// ARGV: now, staleBefore, member, max, ttlSeconds, who. Returns nil when full.
 var presenceJoinScript = redis.NewScript(`
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[2])
 local exists = redis.call('ZSCORE', KEYS[1], ARGV[3])
-if (not exists) and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[4]) then return -1 end
+if (not exists) and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[4]) then return false end
 redis.call('ZADD', KEYS[1], ARGV[1], ARGV[3])
 redis.call('EXPIRE', KEYS[1], ARGV[5])
-return redis.call('ZCARD', KEYS[1])
+if ARGV[6] ~= '' then
+  redis.call('HSET', KEYS[2], ARGV[3], ARGV[6])
+  redis.call('EXPIRE', KEYS[2], ARGV[5])
+end
+` + presenceSnapshotLua + `
+return out
 `)
 
-// PresenceCount returns the number of live connections in the session.
-func (s *Store) PresenceCount(ctx context.Context, code string) (int, error) {
-	cutoff := time.Now().Add(-presenceStale).Unix()
-	n, err := s.rdb.ZCount(ctx, presenceKey(code), fmt.Sprint(cutoff), "+inf").Result()
-	return int(n), err
+var presenceSnapshotScript = redis.NewScript(presenceSnapshotLua + `
+return out
+`)
+
+// PresenceUser is one live connection and its encrypted display identity.
+type PresenceUser struct {
+	ID  string `json:"id"`
+	Who string `json:"who"`
 }
 
-// PresenceJoin registers a connection. ok=false means the room is full. `who`
-// is the client's encrypted display identity (opaque to the server).
-func (s *Store) PresenceJoin(ctx context.Context, code, connID, who string, max int) (count int, ok bool, err error) {
-	remaining, err := s.TTLRemaining(ctx, code)
-	if err != nil || remaining <= 0 {
-		return 0, false, fmt.Errorf("session expired")
+func parseRoster(v any) []PresenceUser {
+	flat, _ := v.([]any)
+	users := make([]PresenceUser, 0, len(flat)/2)
+	for i := 0; i+1 < len(flat); i += 2 {
+		id, _ := flat[i].(string)
+		who, _ := flat[i+1].(string)
+		users = append(users, PresenceUser{ID: id, Who: who})
+	}
+	return users
+}
+
+func snapshotOf(users []PresenceUser) map[string]any {
+	return map[string]any{"event": "presence", "count": len(users), "users": users}
+}
+
+// PresenceJoin registers a connection in ONE round trip and returns the roster
+// snapshot to send. ok=false means the room is full. `who` is the client's
+// encrypted display identity (opaque to the server).
+func (s *Store) PresenceJoin(ctx context.Context, code, connID, who string, max int, remaining time.Duration) (snapshot map[string]any, ok bool, err error) {
+	if remaining <= 0 {
+		return nil, false, fmt.Errorf("session expired")
 	}
 	now := time.Now().Unix()
-	n, err := presenceJoinScript.Run(ctx, s.rdb, []string{presenceKey(code)},
-		now, now-int64(presenceStale.Seconds()), connID, max, int64(remaining.Seconds())+1).Int()
+	res, err := presenceJoinScript.Run(ctx, s.rdb, []string{presenceKey(code), whoKey(code)},
+		now, now-int64(presenceStale.Seconds()), connID, max, int64(remaining.Seconds())+1, who).Result()
+	if err == redis.Nil || res == nil {
+		return nil, false, nil // room is full
+	}
 	if err != nil {
-		return 0, false, err
+		return nil, false, err
 	}
-	if n < 0 {
-		return 0, false, nil
-	}
-	if who != "" {
-		pipe := s.rdb.TxPipeline()
-		pipe.HSet(ctx, whoKey(code), connID, who)
-		pipe.Expire(ctx, whoKey(code), remaining)
-		_, _ = pipe.Exec(ctx)
-	}
-	return n, true, nil
+	return snapshotOf(parseRoster(res)), true, nil
 }
 
 // PresenceTouch refreshes a connection's heartbeat.
@@ -445,46 +471,24 @@ func (s *Store) PresenceLeave(ctx context.Context, code, connID string) {
 	_, _ = pipe.Exec(ctx)
 }
 
-// PresenceUser is one live connection and its encrypted display identity.
-type PresenceUser struct {
-	ID  string `json:"id"`
-	Who string `json:"who"`
-}
-
-// PresenceUsers lists live connections with their encrypted identities.
-func (s *Store) PresenceUsers(ctx context.Context, code string) ([]PresenceUser, error) {
-	cutoff := time.Now().Add(-presenceStale).Unix()
-	ids, err := s.rdb.ZRangeByScore(ctx, presenceKey(code), &redis.ZRangeBy{Min: fmt.Sprint(cutoff), Max: "+inf"}).Result()
-	if err != nil {
-		return nil, err
-	}
-	users := make([]PresenceUser, 0, len(ids))
-	if len(ids) == 0 {
-		return users, nil
-	}
-	whos, err := s.rdb.HMGet(ctx, whoKey(code), ids...).Result()
-	if err != nil {
-		return nil, err
-	}
-	for i, id := range ids {
-		w, _ := whos[i].(string)
-		users = append(users, PresenceUser{ID: id, Who: w})
-	}
-	return users, nil
-}
-
-// PresenceSnapshot is the payload sent to clients: count plus who is here.
+// PresenceSnapshot returns the current roster in one round trip.
 func (s *Store) PresenceSnapshot(ctx context.Context, code string) map[string]any {
-	users, err := s.PresenceUsers(ctx, code)
+	now := time.Now().Unix()
+	res, err := presenceSnapshotScript.Run(ctx, s.rdb, []string{presenceKey(code), whoKey(code)}, now, now-int64(presenceStale.Seconds())).Result()
 	if err != nil {
-		users = []PresenceUser{}
+		return snapshotOf(nil)
 	}
-	return map[string]any{"event": "presence", "count": len(users), "users": users}
+	return snapshotOf(parseRoster(res))
 }
 
-// PublishPresence broadcasts the current snapshot to every client/instance.
+// PublishSnapshot broadcasts an already-built roster to every client/instance.
+func (s *Store) PublishSnapshot(ctx context.Context, code string, snapshot map[string]any) {
+	s.rdb.Publish(ctx, wsChannel(code), mustJSON(snapshot))
+}
+
+// PublishPresence builds and broadcasts the current roster.
 func (s *Store) PublishPresence(ctx context.Context, code string) {
-	s.rdb.Publish(ctx, wsChannel(code), mustJSON(s.PresenceSnapshot(ctx, code)))
+	s.PublishSnapshot(ctx, code, s.PresenceSnapshot(ctx, code))
 }
 
 // ---- brute-force lockout ---------------------------------------------------

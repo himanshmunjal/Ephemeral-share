@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/redis/go-redis/v9"
 
 	"ephemeral-share/internal/config"
 	"ephemeral-share/internal/redisclient"
@@ -42,31 +41,25 @@ func NewWebSocketHandler(store *redisclient.Store, cfg *config.Config, guard *Gu
 
 // HandleConnection — GET /ws/sessions/:code
 func (h *WebSocketHandler) HandleConnection(c *gin.Context) {
-	if h.guard.Locked(c) {
-		return
-	}
 	ctx := c.Request.Context()
 	code := c.Param("code")
-	sess, err := h.store.GetSession(ctx, code)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if err == redis.Nil {
-			status = http.StatusGone
-			h.guard.Miss(c)
-		}
-		c.JSON(status, gin.H{"error": "session not found or expired"})
+	lk, ok := h.guard.Check(c, code, redisclient.LookupOpts{}, http.StatusGone)
+	if !ok {
 		return
 	}
+	sess := lk.Session
 
-	// Atomic participant cap: the connection is admitted only if the room has
-	// space (stale heartbeats are swept first), so reloads don't burn slots.
+	// Atomic participant cap + identity + roster in ONE round trip: stale
+	// heartbeats are swept, the connection is admitted only if the room has
+	// space, and the roster comes back for the newcomer. Reloads don't leak
+	// slots because slots are tied to live connections, not to join calls.
 	connID := uuid.NewString()
-	_, ok, err := h.store.PresenceJoin(ctx, code, connID, validWho(c.Query("who")), sess.MaxParticipants)
+	snapshot, ok2, err := h.store.PresenceJoin(ctx, code, connID, validWho(c.Query("who")), sess.MaxParticipants, lk.TTL)
 	if err != nil {
 		c.JSON(http.StatusGone, gin.H{"error": "session not found or expired"})
 		return
 	}
-	if !ok {
+	if !ok2 {
 		c.JSON(http.StatusConflict, gin.H{"error": "this session is full", "code": "full"})
 		return
 	}
@@ -89,9 +82,9 @@ func (h *WebSocketHandler) HandleConnection(c *gin.Context) {
 
 	// Tell the newcomer the current count directly (its pub/sub subscription
 	// may not be live yet), and everyone else via Redis.
-	first, _ := json.Marshal(h.store.PresenceSnapshot(context.Background(), code))
+	first, _ := json.Marshal(snapshot)
 	_ = hub.WriteTo(conn, first)
-	h.store.PublishPresence(context.Background(), code)
+	h.store.PublishSnapshot(context.Background(), code, snapshot)
 
 	done := make(chan struct{})
 	go func() {

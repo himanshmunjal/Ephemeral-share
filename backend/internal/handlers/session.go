@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 
 	"ephemeral-share/internal/analytics"
 	"ephemeral-share/internal/config"
@@ -87,29 +86,18 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 
 // GetSession — GET /api/v1/sessions/:code
 func (h *SessionHandler) GetSession(c *gin.Context) {
-	if h.guard.Locked(c) {
+	lk, ok := h.guard.Check(c, c.Param("code"), redisclient.LookupOpts{Presence: true}, http.StatusNotFound)
+	if !ok {
 		return
 	}
-	ctx := c.Request.Context()
-	code := c.Param("code")
-	sess, err := h.store.GetSession(ctx, code)
-	if err == redis.Nil {
-		h.guard.Miss(c)
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found or expired", "code": "not_found"})
-		return
-	} else if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
-		return
-	}
-	ttl, _ := h.store.TTLRemaining(ctx, code)
-	online, _ := h.store.PresenceCount(ctx, code)
+	sess := lk.Session
 	c.JSON(http.StatusOK, gin.H{
 		"code":              sess.Code,
 		"type":              sess.Type,
 		"max_participants":  sess.MaxParticipants,
-		"online":            online,
+		"online":            lk.Online,
 		"expires_at":        sess.ExpiresAt,
-		"ttl_seconds":       int(ttl.Seconds()),
+		"ttl_seconds":       int(lk.TTL.Seconds()),
 		"ttl_total_seconds": int(h.cfg.SessionTTL.Seconds()),
 		"limits":            h.limits(),
 	})
@@ -120,44 +108,25 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 // opens a socket. The authoritative, race-free cap is enforced atomically
 // when the WebSocket registers its presence.
 func (h *SessionHandler) JoinSession(c *gin.Context) {
-	if h.guard.Locked(c) {
+	lk, ok := h.guard.Check(c, c.Param("code"), redisclient.LookupOpts{Presence: true}, http.StatusNotFound)
+	if !ok {
 		return
 	}
-	ctx := c.Request.Context()
-	code := c.Param("code")
-	sess, err := h.store.GetSession(ctx, code)
-	if err == redis.Nil {
-		h.guard.Miss(c)
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found or expired", "code": "not_found"})
-		return
-	} else if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
-		return
-	}
-	online, _ := h.store.PresenceCount(ctx, code)
-	if online >= sess.MaxParticipants {
+	if lk.Online >= lk.Session.MaxParticipants {
 		c.JSON(http.StatusConflict, gin.H{"error": "this session is full", "code": "full"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"online": online, "max_participants": sess.MaxParticipants})
+	c.JSON(http.StatusOK, gin.H{"online": lk.Online, "max_participants": lk.Session.MaxParticipants})
 }
 
 // DeleteSession — DELETE /api/v1/sessions/:code (owner-only early termination)
 func (h *SessionHandler) DeleteSession(c *gin.Context) {
-	if h.guard.Locked(c) {
-		return
-	}
 	code := c.Param("code")
-	sess, err := h.store.GetSession(c.Request.Context(), code)
-	if err == redis.Nil {
-		h.guard.Miss(c)
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found or expired", "code": "not_found"})
-		return
-	} else if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+	lk, ok := h.guard.Check(c, code, redisclient.LookupOpts{}, http.StatusNotFound)
+	if !ok {
 		return
 	}
-	if !tokenEquals(c.GetHeader("X-Owner-Token"), sess.OwnerToken) {
+	if !tokenEquals(c.GetHeader("X-Owner-Token"), lk.Session.OwnerToken) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "only the session owner can end it early"})
 		return
 	}

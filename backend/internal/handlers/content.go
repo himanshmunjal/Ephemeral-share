@@ -33,28 +33,17 @@ func NewContentHandler(store *redisclient.Store, s3 *storage.Client, cfg *config
 	return &ContentHandler{store: store, s3: s3, cfg: cfg, stats: stats, guard: guard}
 }
 
-func (h *ContentHandler) requireLiveSession(c *gin.Context) (*models.Session, bool) {
-	if h.guard.Locked(c) {
-		return nil, false
-	}
-	sess, err := h.store.GetSession(c.Request.Context(), c.Param("code"))
-	if err != nil {
-		if err == redis.Nil {
-			h.guard.Miss(c)
-			c.JSON(http.StatusGone, gin.H{"error": "session not found or expired", "code": "not_found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
-		}
-		return nil, false
-	}
-	return sess, true
+// requireLiveSession does the lockout check and session load in one round trip.
+func (h *ContentHandler) requireLiveSession(c *gin.Context, opts redisclient.LookupOpts) (*redisclient.Lookup, bool) {
+	return h.guard.Check(c, c.Param("code"), opts, http.StatusGone)
 }
 
 // RequestUploadURL — POST /api/v1/sessions/:code/content/upload-url
 // Issues a pre-signed PUT URL; the client uploads the binary directly to
 // object storage so large files never transit the API process.
 func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	lk, ok := h.requireLiveSession(c, redisclient.LookupOpts{})
+	if !ok {
 		return
 	}
 	ctx := c.Request.Context()
@@ -79,7 +68,7 @@ func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
 	}
 
 	// Atomically claim a file slot + bytes against the session quotas.
-	res, err := h.store.ReserveQuota(ctx, code, "files", h.cfg.MaxFilesPerSession, req.SizeBytes, h.cfg.MaxSessionBytes)
+	res, err := h.store.ReserveQuota(ctx, code, "files", h.cfg.MaxFilesPerSession, req.SizeBytes, h.cfg.MaxSessionBytes, lk.TTL)
 	if err != nil {
 		c.JSON(http.StatusGone, gin.H{"error": "session expired", "code": "not_found"})
 		return
@@ -115,7 +104,7 @@ func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
 	}
 	// Held as pending — invisible to other participants — until the uploader
 	// calls CompleteUpload after its direct-to-storage PUT succeeds.
-	if err := h.store.AddPendingUpload(ctx, item); err != nil {
+	if err := h.store.AddPendingUpload(ctx, item, lk.TTL); err != nil {
 		h.store.ReleaseQuota(ctx, code, "files", req.SizeBytes)
 		c.JSON(http.StatusGone, gin.H{"error": "session expired mid-upload"})
 		return
@@ -133,7 +122,8 @@ func (h *ContentHandler) RequestUploadURL(c *gin.Context) {
 // does the file join the session's content list and get broadcast, so nobody
 // sees (or tries to download) a half-uploaded file.
 func (h *ContentHandler) CompleteUpload(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	lk, ok := h.requireLiveSession(c, redisclient.LookupOpts{})
+	if !ok {
 		return
 	}
 	ctx := c.Request.Context()
@@ -175,7 +165,7 @@ func (h *ContentHandler) CompleteUpload(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
 		return
 	}
-	if err := h.store.AddContent(ctx, *item); err != nil {
+	if err := h.store.AddContent(ctx, *item, lk.TTL); err != nil {
 		c.JSON(http.StatusGone, gin.H{"error": "session expired mid-upload"})
 		return
 	}
@@ -188,7 +178,8 @@ func (h *ContentHandler) CompleteUpload(c *gin.Context) {
 
 // AddTextContent — POST /api/v1/sessions/:code/content/text
 func (h *ContentHandler) AddTextContent(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	lk, ok := h.requireLiveSession(c, redisclient.LookupOpts{})
+	if !ok {
 		return
 	}
 	ctx := c.Request.Context()
@@ -200,7 +191,7 @@ func (h *ContentHandler) AddTextContent(c *gin.Context) {
 		return
 	}
 
-	res, err := h.store.ReserveQuota(ctx, code, "texts", h.cfg.MaxTextItems, 0, h.cfg.MaxSessionBytes)
+	res, err := h.store.ReserveQuota(ctx, code, "texts", h.cfg.MaxTextItems, 0, h.cfg.MaxSessionBytes, lk.TTL)
 	if err != nil {
 		c.JSON(http.StatusGone, gin.H{"error": "session expired"})
 		return
@@ -220,7 +211,7 @@ func (h *ContentHandler) AddTextContent(c *gin.Context) {
 		UploaderID:  participantID(c),
 		Who:         whoHeader(c),
 	}
-	if err := h.store.AddContent(ctx, item); err != nil {
+	if err := h.store.AddContent(ctx, item, lk.TTL); err != nil {
 		h.store.ReleaseQuota(ctx, code, "texts", 0)
 		c.JSON(http.StatusGone, gin.H{"error": "session expired"})
 		return
@@ -236,7 +227,7 @@ func (h *ContentHandler) AddTextContent(c *gin.Context) {
 // Only the uploader (the browser that shared the item) can remove it, whether
 // it is finished or still pending (cancel / retry). Removing frees its quota.
 func (h *ContentHandler) CancelOrDeleteContent(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	if _, ok := h.requireLiveSession(c, redisclient.LookupOpts{}); !ok {
 		return
 	}
 	ctx := c.Request.Context()
@@ -288,12 +279,13 @@ func (h *ContentHandler) CancelOrDeleteContent(c *gin.Context) {
 }
 
 // ListContent — GET /api/v1/sessions/:code/content
+// Two round trips total: (lockout + session + ids), then one MGET for all items.
 func (h *ContentHandler) ListContent(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	lk, ok := h.requireLiveSession(c, redisclient.LookupOpts{ContentIDs: true})
+	if !ok {
 		return
 	}
-	code := c.Param("code")
-	items, err := h.store.ListContent(c.Request.Context(), code)
+	items, err := h.store.GetContentItems(c.Request.Context(), c.Param("code"), lk.ContentIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list content"})
 		return
@@ -308,7 +300,7 @@ func (h *ContentHandler) ListContent(c *gin.Context) {
 // DownloadContent — GET /api/v1/sessions/:code/content/:id/download
 // Redirects to a short-lived pre-signed GET URL rather than proxying the file.
 func (h *ContentHandler) DownloadContent(c *gin.Context) {
-	if _, ok := h.requireLiveSession(c); !ok {
+	if _, ok := h.requireLiveSession(c, redisclient.LookupOpts{}); !ok {
 		return
 	}
 	code := c.Param("code")

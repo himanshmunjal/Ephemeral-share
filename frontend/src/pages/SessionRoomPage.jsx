@@ -83,12 +83,20 @@ export default function SessionRoomPage() {
     setGone(null);
     (async () => {
       try {
-        const s = await api.getSession(code);
-        await api.joinSession(code); // capacity pre-check: friendly "full" screen
+        // Fetch the session and its feed together: each call is a network round
+        // trip to the server, so doing them one after another tripled the load
+        // time. The feed is best-effort (an expired session fails getSession).
+        const [s, feed] = await Promise.all([api.getSession(code), api.listContent(code).catch(() => null)]);
         if (cancelled) return;
+        // getSession already reports who's online and the cap, so no separate
+        // join pre-check call is needed (the socket enforces the cap atomically).
+        if (s.online >= s.max_participants) {
+          setGone({ kind: "full" });
+          return;
+        }
         setSession(s);
         setOnline(s.online);
-        await refreshContent();
+        if (feed) setItems(feed.items || []);
       } catch (e) {
         if (cancelled) return;
         if (e.code === "not_found" || e.status === 404 || e.status === 410) setGone({ kind: "not_found" });
