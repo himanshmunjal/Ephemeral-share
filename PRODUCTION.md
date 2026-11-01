@@ -24,13 +24,17 @@ error, just silent leakage.
     `CONFIG SET` depending on plan.
   - Upstash: historically restricted or unsupported on some plans — verify
     for your exact plan before choosing it for this project.
-- The backend checks `CONFIG GET notify-keyspace-events` at boot
+- The backend first tries `CONFIG SET notify-keyspace-events Ex` itself, then checks `CONFIG GET notify-keyspace-events` at boot
   (`cmd/server/main.go: verifyKeyspaceNotifications`) and refuses to start
   if it can read the config and it's missing `Ex`/`A`. If the provider
   blocks `CONFIG GET` itself, the backend only logs a warning — verify
   manually in that case.
-- The periodic sweep (`PeriodicSweep`, every 1 min) is a backstop, not a
-  substitute — it only cleans up analytics/Postgres state, not S3 objects.
+- Two periodic backstops run regardless: `PeriodicSweep` (every minute) fixes
+  analytics rows, and the **orphan sweep** (every `ORPHAN_SWEEP_SECONDS`, and once
+  at boot) deletes storage objects whose session no longer exists — so a restart
+  or a missed event can't leak files. If your Redis forbids `CONFIG SET`, set
+  `ALLOW_NO_KEYSPACE_EVENTS=true` and rely on the orphan sweep (cleanup is then
+  delayed by up to one sweep interval).
 
 ## 2. Secrets: rotate everything
 
@@ -99,6 +103,17 @@ store you use:
 
 Boot check: the backend refuses to start in release mode if
 `S3_PUBLIC_ENDPOINT` still contains `localhost`/`127.0.0.1`.
+
+## 6. Postgres is optional
+
+Leave `POSTGRES_DSN` unset to run Redis-only (no traffic stats). The production
+safety check only inspects the DSN if one is set.
+
+## 7. Error tracking (optional)
+
+Set `SENTRY_DSN` on the backend and `VITE_SENTRY_DSN` on the frontend build. Both
+sides scrub session codes (which double as encryption keys) from every event and
+disable request data, PII, tracing, replay and browser breadcrumbs.
 
 ## Quick verification after deploy
 
