@@ -9,8 +9,24 @@ html.dark {
   color-scheme: dark;
 }
 
+/* Paper with a faint dot grid, like a notebook page. */
 body {
+  background-color: theme("colors.slate.50");
+  background-image: radial-gradient(rgba(29, 26, 22, 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
+  color: theme("colors.slate.900");
   transition: background-color 0.15s ease;
+}
+html.dark body {
+  background-color: theme("colors.slate.950");
+  background-image: radial-gradient(rgba(246, 242, 234, 0.05) 1px, transparent 1px);
+  color: theme("colors.slate.100");
+}
+
+h1,
+h2.font-display {
+  font-family: theme("fontFamily.display");
+  letter-spacing: -0.01em;
 }
 
 * {
@@ -18,4 +34,70 @@ body {
 }
 html.dark * {
   scrollbar-color: theme("colors.slate.700") transparent;
+}
+
+@layer components {
+  /* Paper-cut button: inked outline + hard offset shadow that "presses in". */
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg border-[1.5px] border-slate-900 bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white;
+    box-shadow: 3px 3px 0 0 theme("colors.slate.900");
+    transition: transform 0.08s ease, box-shadow 0.08s ease, background-color 0.15s ease;
+  }
+  .btn-primary:hover:not(:disabled) {
+    @apply bg-brand-700;
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 0 theme("colors.slate.900");
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 0 theme("colors.slate.900");
+  }
+  html.dark .btn-primary {
+    @apply border-brand-400/70;
+    box-shadow: 3px 3px 0 0 rgba(79, 163, 142, 0.55);
+  }
+  html.dark .btn-primary:hover:not(:disabled) {
+    box-shadow: 4px 4px 0 0 rgba(79, 163, 142, 0.7);
+  }
+
+  /* Highlighter stroke behind the access code. */
+  .marker {
+    background: linear-gradient(transparent 52%, theme("colors.marker") 52%, theme("colors.marker") 92%, transparent 92%);
+    padding: 0 0.3rem;
+    margin: 0 -0.3rem;
+    border-radius: 2px;
+  }
+  html.dark .marker {
+    background: linear-gradient(transparent 55%, rgba(79, 163, 142, 0.4) 55%, rgba(79, 163, 142, 0.4) 92%, transparent 92%);
+  }
+
+  /* The room header sits on the page like a pinned card. */
+  .pinned {
+    @apply relative overflow-hidden rounded-xl border-[1.5px] border-slate-900/80 bg-white;
+    box-shadow: 4px 4px 0 0 theme("colors.slate.900 / 0.85");
+  }
+  html.dark .pinned {
+    @apply border-slate-600 bg-slate-900;
+    box-shadow: 4px 4px 0 0 rgba(79, 163, 142, 0.35);
+  }
+
+  /* Burning fuse: dotted track, remaining length in ink, glowing spark at the tip. */
+  .fuse-track {
+    @apply absolute inset-x-0 bottom-0 h-[5px];
+    background-image: radial-gradient(circle, theme("colors.slate.300") 1px, transparent 1.4px);
+    background-size: 7px 5px;
+  }
+  .fuse-fill {
+    @apply absolute bottom-0 left-0 h-[5px] bg-brand-600;
+    transition: width 1s linear;
+  }
+  html.dark .fuse-fill {
+    @apply bg-brand-400;
+  }
+  .fuse-fill::after {
+    content: "";
+    @apply absolute right-0 -top-[3px] h-[11px] w-[11px] animate-spark rounded-full;
+    background: #e8553d;
+    box-shadow: 0 0 8px 2px rgba(232, 85, 61, 0.65);
+  }
 }

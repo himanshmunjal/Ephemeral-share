@@ -6,23 +6,21 @@ export default function Header() {
   const inRoom = pathname.startsWith("/session/");
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/80 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
+    <header className="sticky top-0 z-40 border-b border-slate-300/70 bg-slate-50/85 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/85">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3.5">
-        <Link to="/" className="flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-slate-50">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-white">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-              <path d="M12 2 3 7l9 5 9-5-9-5Z" />
-              <path d="M3 12l9 5 9-5" />
-              <path d="M3 17l9 5 9-5" />
-            </svg>
+        <Link to="/" className="flex items-baseline gap-1 text-slate-900 dark:text-slate-50" aria-label="ephemeral.share home">
+          <span className="font-display text-xl font-semibold italic tracking-tight">ephemeral</span>
+          <span aria-hidden="true" className="flex gap-[3px] text-brand-600 dark:text-brand-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-50" />
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-20" />
           </span>
-          ephemeral<span className="text-brand-600">.share</span>
         </Link>
 
         <div className="flex items-center gap-3">
           {!inRoom && (
             <span className="hidden text-sm text-slate-400 sm:inline dark:text-slate-500">
-              End-to-end encrypted · gone in 5 minutes
+              Locked in your browser · gone when the timer ends
             </span>
           )}
           <ThemeToggle />
