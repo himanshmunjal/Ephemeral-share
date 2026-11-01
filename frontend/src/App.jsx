@@ -4,10 +4,12 @@ import Footer from "./components/Footer.jsx";
 import CreateSessionPage from "./pages/CreateSessionPage.jsx";
 import JoinSessionPage from "./pages/JoinSessionPage.jsx";
 import SessionRoomPage from "./pages/SessionRoomPage.jsx";
+import { PrivacyPage, TermsPage, AbusePage } from "./pages/LegalPages.jsx";
+import SessionGone from "./components/SessionGone.jsx";
 
 export default function App() {
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div className="flex min-h-screen flex-col text-slate-900 dark:text-slate-100">
       <Header />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
@@ -15,6 +17,10 @@ export default function App() {
           <Route path="/" element={<CreateSessionPage />} />
           <Route path="/join" element={<JoinSessionPage />} />
           <Route path="/session/:code" element={<SessionRoomPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/abuse" element={<AbusePage />} />
+          <Route path="*" element={<SessionGone kind="not_found" />} />
         </Routes>
       </main>
 
