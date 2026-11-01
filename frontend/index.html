@@ -4,15 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ephemeral Share</title>
-    <script>
-      // Applied synchronously, before first paint, to avoid a light-mode flash
-      // for users whose stored/system preference is dark.
-      (function () {
-        var stored = localStorage.getItem("ephemeral-share:theme") || "system";
-        var isDark = stored === "dark" || (stored === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-        if (isDark) document.documentElement.classList.add("dark");
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

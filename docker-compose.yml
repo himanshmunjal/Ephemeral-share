@@ -32,9 +32,13 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # Docker Hub no longer serves minio/minio, so use the Bitnami legacy
+    # mirror (frozen, unmaintained -- fine for local dev only).
+    image: bitnamilegacy/minio:latest
+    # root so it can write to the existing miniodata volume (owned by root
+    # from the old minio/minio image).
+    user: root
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -42,7 +46,7 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - miniodata:/data
+      - miniodata:/bitnami/minio/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -50,7 +54,7 @@ services:
       retries: 5
 
   minio-init:
-    image: minio/mc:latest
+    image: bitnamilegacy/minio-client:latest
     depends_on:
       minio:
         condition: service_healthy
@@ -78,8 +82,9 @@ services:
       S3_REGION: us-east-1
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
-      SESSION_TTL_SECONDS: 300
-      MAX_UPLOAD_MB: 200
+      SESSION_TTL_SECONDS: 3600
+      MAX_UPLOAD_MB: 25
+      MAX_PARTICIPANTS: 10
       ALLOWED_ORIGIN: http://localhost:5173
       RATE_LIMIT_PER_MIN: 60
       CODE_LENGTH: 8

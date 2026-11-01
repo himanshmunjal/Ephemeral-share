@@ -22,4 +22,4 @@ cat > /tmp/cors.json <<'EOF'
   ]
 }
 EOF
-mc cors set local/ephemeral-share /tmp/cors.json
+mc cors set local/ephemeral-share /tmp/cors.json || echo "CORS not set (unsupported by this MinIO build; server-wide CORS applies)"
