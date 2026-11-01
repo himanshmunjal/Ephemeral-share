@@ -9,13 +9,15 @@
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync",
     "cap:ios": "npm run cap:sync && npx cap open ios",
-    "cap:android": "npm run cap:sync && npx cap open android"
+    "cap:android": "npm run cap:sync && npx cap open android",
+    "test": "vitest run"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.1",
     "@capacitor/cli": "^8.5.1",
     "@capacitor/core": "^8.5.1",
     "@capacitor/ios": "^8.5.1",
+    "@sentry/browser": "^8.55.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.1"
@@ -25,6 +27,7 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.10",
-    "vite": "^5.4.2"
+    "vite": "^5.4.2",
+    "vitest": "^2.1.9"
   }
 }

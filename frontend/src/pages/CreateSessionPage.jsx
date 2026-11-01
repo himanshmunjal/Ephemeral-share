@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, ownerToken } from "../lib/api";
 import { useToast } from "../components/ToastProvider.jsx";
 
 const MODES = [
@@ -42,10 +42,9 @@ export default function CreateSessionPage() {
     setError(null);
     try {
       const res = await api.createSession(type, type === "shared_workspace" ? maxParticipants : undefined);
-      // owner_token itself lives in an HttpOnly cookie (unreadable from JS, by
-      // design) and authorizes DELETE /sessions/:code server-side; this flag
-      // just lets the room UI know to show the "end session" control.
-      sessionStorage.setItem(`owner:${res.code}`, "1");
+      // The owner token authorises "end session" and deleting anyone's item.
+      // It's kept only in this browser and sent as an X-Owner-Token header.
+      ownerToken.set(res.code, res.owner_token);
 
       navigate(`/session/${res.code}`);
     } catch (e) {
@@ -58,9 +57,9 @@ export default function CreateSessionPage() {
 
   return (
     <div className="mx-auto max-w-xl">
-      <h1 className="mb-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">Start a session</h1>
+      <h1 className="mb-2 text-3xl font-semibold text-slate-900 dark:text-slate-50">Hand something over,<br />then let it <span className="marker italic">vanish</span>.</h1>
       <p className="mb-8 text-slate-500 dark:text-slate-400">
-        Pick a mode, get a link, share it. Everything is encrypted in your browser and self-destructs in 5 minutes.
+        Pick a mode, get a code, pass it to whoever needs it. Everything is locked in your browser first, and wiped when the timer runs out.
       </p>
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -68,9 +67,9 @@ export default function CreateSessionPage() {
           <button
             key={mode.id}
             onClick={() => setType(mode.id)}
-            className={`rounded-xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+            className={`rounded-xl border-[1.5px] p-5 text-left transition hover:-translate-y-0.5 ${
               type === mode.id
-                ? "border-brand-600 bg-brand-50 shadow-sm dark:border-brand-500 dark:bg-brand-500/10"
+                ? "-rotate-[0.6deg] border-slate-900 bg-brand-50 shadow-[3px_3px_0_0_theme(colors.slate.900)] dark:border-brand-400 dark:bg-brand-500/10 dark:shadow-[3px_3px_0_0_rgba(79,163,142,0.5)]"
                 : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
             }`}
           >
@@ -93,7 +92,7 @@ export default function CreateSessionPage() {
           <input
             type="number"
             min={2}
-            max={100}
+            max={10}
             value={maxParticipants}
             onChange={(e) => setMaxParticipants(Number(e.target.value))}
             className="mt-1 w-32 rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
@@ -106,7 +105,11 @@ export default function CreateSessionPage() {
           <rect x="5" y="11" width="14" height="9" rx="2" />
           <path d="M8 11V8a4 4 0 118 0v3" />
         </svg>
-        <span>Files and text are encrypted on your device before upload. The key is derived from the access code itself — we never see it.</span>
+        <span>
+          Files and text are encrypted in your browser and stored encrypted. The key comes from the access code, so anyone who has the code
+          can open the session — share it only with people you trust. Please don’t share illegal content (see the{" "}
+          <Link to="/terms" className="underline">Terms</Link>).
+        </span>
       </div>
 
       {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
@@ -114,7 +117,7 @@ export default function CreateSessionPage() {
       <button
         onClick={handleCreate}
         disabled={loading}
-        className="w-full rounded-lg bg-brand-600 py-3 font-medium text-white transition hover:bg-brand-700 disabled:opacity-60"
+        className="btn-primary w-full py-3 text-base disabled:opacity-60"
       >
         {loading ? "Creating…" : "Create session"}
       </button>

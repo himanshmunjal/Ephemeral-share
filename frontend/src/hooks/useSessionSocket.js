@@ -9,7 +9,7 @@ const TERMINAL_EVENTS = new Set(["session_expired", "session_ended"]);
  * if the connection drops, and calls onReconnect so the caller can catch up
  * on anything it missed while disconnected.
  */
-export function useSessionSocket(code, onEvent, onReconnect) {
+export function useSessionSocket(code, onEvent, onReconnect, who) {
   const handlersRef = useRef({ onEvent, onReconnect });
   handlersRef.current = { onEvent, onReconnect };
 
@@ -21,7 +21,7 @@ export function useSessionSocket(code, onEvent, onReconnect) {
     let stopped = false;
 
     function connect() {
-      socket = new WebSocket(wsUrl(code));
+      socket = new WebSocket(wsUrl(code, who));
 
       socket.onopen = () => {
         if (attempt > 0) handlersRef.current.onReconnect?.();
@@ -53,5 +53,5 @@ export function useSessionSocket(code, onEvent, onReconnect) {
       clearTimeout(retryTimer);
       socket?.close();
     };
-  }, [code]);
+  }, [code, who]);
 }

@@ -42,7 +42,7 @@ export default function JoinSessionPage() {
 
   return (
     <div className="mx-auto max-w-sm">
-      <h1 className="mb-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">Join a session</h1>
+      <h1 className="mb-1 text-3xl font-semibold text-slate-900 dark:text-slate-50">Got a code?</h1>
       <p className="mb-8 text-slate-500 dark:text-slate-400">
         Paste the link you were sent, or enter the access code directly.
       </p>
@@ -60,14 +60,14 @@ export default function JoinSessionPage() {
         <button
           type="submit"
           disabled={loading || !input.trim()}
-          className="w-full rounded-lg bg-brand-600 py-3 font-medium text-white transition hover:bg-brand-700 disabled:opacity-60"
+          className="btn-primary w-full py-3 text-base disabled:opacity-60"
         >
           {loading ? "Checking…" : "Join"}
         </button>
       </form>
 
       <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-        The access code alone is enough — content is encrypted and decrypted automatically.
+        The access code is all you need — content is decrypted automatically in your browser. Treat the code like a password.
       </p>
     </div>
   );

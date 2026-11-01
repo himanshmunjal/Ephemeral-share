@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { decryptText, decryptJSONUrlSafe, decryptBytes } from "../lib/crypto";
 import { formatBytes } from "../lib/format";
+import { decryptIdentity } from "../lib/identity";
+import Avatar from "./Avatar.jsx";
 import { useToast } from "./ToastProvider.jsx";
 
 const LockIcon = (props) => (
@@ -18,7 +20,7 @@ const FileIcon = (props) => (
   </svg>
 );
 
-export default function ContentFeedItem({ item, code, encKey }) {
+export default function ContentFeedItem({ item, code, encKey, canDelete, onDelete }) {
   const isFile = item.kind === "file";
   const isSnippet = item.content_type === "snippet";
   const [copied, setCopied] = useState(false);
@@ -26,6 +28,8 @@ export default function ContentFeedItem({ item, code, encKey }) {
   const [meta, setMeta] = useState(null); // { name, type } for files
   const [decryptError, setDecryptError] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [sharer, setSharer] = useState(null); // { name, color } of who shared it
   const toast = useToast();
 
   useEffect(() => {
@@ -48,6 +52,14 @@ export default function ContentFeedItem({ item, code, encKey }) {
       cancelled = true;
     };
   }, [encKey, isFile, item.filename, item.text_payload]);
+
+  useEffect(() => {
+    let cancelled = false;
+    decryptIdentity(encKey, item.who).then((s) => !cancelled && setSharer(s));
+    return () => {
+      cancelled = true;
+    };
+  }, [encKey, item.who]);
 
   async function handleCopy() {
     if (decryptedText == null) return;
@@ -92,6 +104,17 @@ export default function ContentFeedItem({ item, code, encKey }) {
     }
   }
 
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await api.deleteContent(code, item.id);
+      onDelete?.(item.id);
+    } catch (e) {
+      toast.error(e.message || "Couldn't delete this item");
+      setDeleting(false);
+    }
+  }
+
   const locked = !encKey;
 
   return (
@@ -111,6 +134,12 @@ export default function ContentFeedItem({ item, code, encKey }) {
                 : meta?.name || (decryptError ? "Couldn't decrypt" : "Decrypting…")
               : `${item.content_type} · text`}
           </div>
+          {sharer && (
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
+              <Avatar name={sharer.name} color={sharer.color} size={14} />
+              <span className="truncate">{item.mine ? "You" : sharer.name}</span>
+            </div>
+          )}
           {isFile && item.size_bytes > 0 && (
             <div className="text-xs text-slate-400 dark:text-slate-500">{formatBytes(item.size_bytes)}</div>
           )}
@@ -126,11 +155,22 @@ export default function ContentFeedItem({ item, code, encKey }) {
         </div>
       </div>
 
+      <div className="flex shrink-0 items-center gap-3">
+      {canDelete && (
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          title="Delete this for everyone (you shared it)"
+          className="text-sm font-medium text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+        >
+          {deleting ? "Deleting…" : "Delete"}
+        </button>
+      )}
       {isFile ? (
         <button
           onClick={handleDownload}
           disabled={locked || !meta || downloading}
-          className="shrink-0 text-sm font-medium text-brand-600 hover:underline disabled:opacity-50 disabled:no-underline dark:text-brand-500"
+          className="text-sm font-medium text-brand-600 hover:underline disabled:opacity-50 disabled:no-underline dark:text-brand-500"
         >
           {downloading ? "Decrypting…" : "Download"}
         </button>
@@ -138,13 +178,14 @@ export default function ContentFeedItem({ item, code, encKey }) {
         <button
           onClick={handleCopy}
           disabled={locked || decryptedText == null}
-          className={`shrink-0 text-sm font-medium hover:underline disabled:opacity-50 disabled:no-underline ${
+          className={`text-sm font-medium hover:underline disabled:opacity-50 disabled:no-underline ${
             copied ? "text-emerald-600 dark:text-emerald-400" : "text-brand-600 dark:text-brand-500"
           }`}
         >
           {copied ? "Copied!" : "Copy"}
         </button>
       )}
+      </div>
     </div>
   );
 }
